@@ -1,22 +1,25 @@
 import sys
 import random
 from PyQt6.QtWidgets import QWidget, QLabel, QHBoxLayout, QVBoxLayout, QApplication
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSlot, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QBrush, QPen, QFont
 
 class OverlayWindow(QWidget):
+    cancelled = pyqtSignal()
+
     def __init__(self):
         super().__init__()
-        # Window Flags: Frameless, On Top, No Focus, Tool (standard)
-        # We remove ToolTip as it crashes on Wayland without parent
+        # Window Flags: Frameless, On Top, Tool
+        # We remove WindowDoesNotAcceptFocus to allow catching ESC key
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
                             Qt.WindowType.WindowStaysOnTopHint | 
-                            Qt.WindowType.Tool |
-                            Qt.WindowType.WindowDoesNotAcceptFocus)
+                            Qt.WindowType.Tool)
         
         # Transparent Background & Click-through
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        # Note: If we want to catch keys, we might need to disable TransparentForMouseEvents 
+        # OR just rely on focus. Let's try keeping it for now.
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         
         # Fullscreen to bypass Wayland positioning restrictions
@@ -38,6 +41,16 @@ class OverlayWindow(QWidget):
         super().showEvent(event)
         # Ensure fullscreen
         self.setGeometry(QApplication.primaryScreen().geometry())
+        # Request focus to catch ESC key
+        self.activateWindow()
+        self.raise_()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelled.emit()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def update_amplitude(self, level):
         # Boost low levels for visibility

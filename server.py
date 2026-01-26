@@ -17,6 +17,7 @@ class WhisperServer:
         self.audio_queue = queue.Queue()
         self.model = None
         self.samplerate = 16000
+        self.abort_transcription = False
         
         # Signals for GUI
         self.signals = ServerSignals()
@@ -135,7 +136,22 @@ class WhisperServer:
             while self.running:
                 time.sleep(0.1)
 
+    def cancel_recording(self):
+        print("Cancellation requested.")
+        self.recording = False
+        self.abort_transcription = True
+        # Clear queue
+        with self.audio_queue.mutex:
+            self.audio_queue.queue.clear()
+        self.signals.state_changed.emit("idle")
+
     def process_audio(self):
+        if self.abort_transcription:
+            print("Transcription aborted.")
+            self.abort_transcription = False
+            self.signals.state_changed.emit("idle")
+            return
+
         self.signals.state_changed.emit("transcribing")
         
         audio_data = []
@@ -159,7 +175,20 @@ class WhisperServer:
                 lang = None
                 
             segments, info = self.model.transcribe(audio_np, beam_size=5, language=lang)
-            text = " ".join([segment.text for segment in segments]).strip()
+            
+            text_parts = []
+            for segment in segments:
+                if self.abort_transcription:
+                    print("Transcription aborted during segment processing.")
+                    break
+                text_parts.append(segment.text)
+            
+            if self.abort_transcription:
+                self.abort_transcription = False
+                self.signals.state_changed.emit("idle")
+                return
+
+            text = " ".join(text_parts).strip()
             
             if text:
                 print(f"Transcription: {text}")
@@ -237,6 +266,7 @@ class WhisperServer:
                     threading.Thread(target=self.process_audio).start()
                 else:
                     print("Starting recording...")
+                    self.abort_transcription = False
                     with self.audio_queue.mutex:
                         self.audio_queue.queue.clear()
                     self.recording = True

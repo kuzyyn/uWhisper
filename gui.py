@@ -358,12 +358,18 @@ class SystemTrayApp:
         
         # Create Overlay Window
         self.overlay = OverlayWindow()
+        self.overlay.cancelled.connect(self.on_cancel_requested)
         
         # Connect Signals if server exists
         if self.server and hasattr(self.server, 'signals'):
             self.server.signals.state_changed.connect(self.on_state_changed)
             self.server.signals.amplitude_changed.connect(self.on_amplitude_changed)
             self.server.signals.text_ready.connect(self.on_text_ready)
+
+    def on_cancel_requested(self):
+        if self.server:
+            self.server.cancel_recording()
+        self.overlay.hide()
 
     def on_state_changed(self, state):
         if state == "recording":
