@@ -1,0 +1,416 @@
+import sys
+import time
+import threading
+from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QWidget, QVBoxLayout, 
+                            QLabel, QComboBox, QPushButton, QRadioButton, QGroupBox, QHBoxLayout, QFrame,
+                            QDialog, QProgressBar, QMessageBox, QCheckBox)
+from PyQt6.QtGui import QIcon, QAction, QFont, QColor, QPalette
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
+from config_manager import settings
+
+# --- Modern Dark StyleSheet ---
+STYLESHEET = """
+    QWidget {
+        background-color: #2b2b2b;
+        color: #ffffff;
+        font-family: 'Segoe UI', 'Ubuntu', sans-serif;
+        font-size: 14px;
+    }
+    QGroupBox {
+        border: 1px solid #3d3d3d;
+        border-radius: 6px;
+        margin-top: 12px;
+        font-weight: bold;
+    }
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 5px;
+        color: #aaaaaa;
+    }
+    QPushButton {
+        background-color: #007acc;
+        color: white;
+        border-radius: 4px;
+        padding: 8px 16px;
+        font-weight: bold;
+    }
+    QPushButton:hover {
+        background-color: #0098ff;
+    }
+    QPushButton:pressed {
+        background-color: #005c99;
+    }
+    QComboBox {
+        background-color: #3d3d3d;
+        border: 1px solid #555555;
+        border-radius: 4px;
+        padding: 5px;
+    }
+    QComboBox::drop-down {
+        subcontrol-origin: padding;
+        subcontrol-position: top right;
+        width: 15px;
+        border-left-width: 0px;
+        border-top-right-radius: 3px;
+        border-bottom-right-radius: 3px;
+    }
+    QRadioButton {
+        spacing: 8px;
+    }
+    QRadioButton::indicator {
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        border: 2px solid #555555;
+    }
+    QRadioButton::indicator:checked {
+        background-color: #007acc;
+        border-color: #007acc;
+    }
+    QLabel#Title {
+        font-size: 18px;
+        font-weight: bold;
+        color: #dddddd;
+        margin-bottom: 10px;
+    }
+"""
+
+class DownloadDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Downloading Model")
+        self.setFixedSize(300, 100)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
+        
+        layout = QVBoxLayout()
+        self.label = QLabel("Downloading model... This may take a while.")
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label)
+        
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0) # Indeterminate
+        layout.addWidget(self.progress)
+        
+        self.setLayout(layout)
+
+class SettingsWindow(QWidget):
+    saved = pyqtSignal()
+
+    def __init__(self, server=None):
+        super().__init__()
+        self.server = server
+        self.setWindowTitle("uWhisper Settings")
+        self.setFixedSize(450, 350) # Taller for more controls
+        self.setup_ui()
+        self.load_settings()
+
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # Title
+        title = QLabel("Application Settings")
+        title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Form Layout
+        form_frame = QFrame()
+        form_frame.setObjectName("panel")
+        form_layout = QVBoxLayout(form_frame)
+        
+        # Model Selection
+        lbl_model = QLabel("Whisper Model:")
+        
+        model_row = QHBoxLayout()
+        self.combo_model = QComboBox()
+        self.combo_model.addItems(["tiny", "base", "small", "medium", "large-v3"])
+        self.combo_model.currentTextChanged.connect(self.check_model_status)
+        model_row.addWidget(self.combo_model)
+        
+        self.btn_delete = QPushButton("🗑️")
+        self.btn_delete.setToolTip("Delete this model from cache")
+        self.btn_delete.setFixedSize(30, 30)
+        self.btn_delete.clicked.connect(self.delete_current_model)
+        model_row.addWidget(self.btn_delete)
+        
+        form_layout.addWidget(lbl_model)
+        form_layout.addLayout(model_row)
+        
+        self.lbl_model_status = QLabel("")
+        self.lbl_model_status.setStyleSheet("color: #888; font-size: 10px;")
+        form_layout.addWidget(self.lbl_model_status)
+
+        # Language
+        lbl_lang = QLabel("Language:")
+        self.combo_lang = QComboBox()
+        self.combo_lang.addItems(["auto", "en", "pl", "de", "fr", "es", "it", "ja", "zh", "ru"])
+        form_layout.addWidget(lbl_lang)
+        form_layout.addWidget(self.combo_lang)
+
+        # Output Mode
+        lbl_mode = QLabel("Output Mode:")
+        form_layout.addWidget(lbl_mode)
+        
+        self.radio_clipboard = QRadioButton("Clipboard Only")
+        self.radio_paste = QRadioButton("Clipboard + Auto-Paste")
+        self.radio_paste.setToolTip("Requires setup_permissions.sh to work natively")
+        
+        form_layout.addWidget(self.radio_clipboard)
+        form_layout.addWidget(self.radio_paste)
+
+        # Notifications
+        self.chk_notifications = QCheckBox("Show System Notifications")
+        self.chk_notifications.setToolTip("Enable standard desktop bubbles (notify-send)")
+        form_layout.addWidget(self.chk_notifications)
+        
+        layout.addWidget(form_frame)
+
+        # Save Button
+        self.btn_save = QPushButton("Save Settings")
+        self.btn_save.setObjectName("primaryButton")
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save.clicked.connect(self.save_settings)
+        layout.addWidget(self.btn_save)
+
+        self.setLayout(layout)
+
+    def load_settings(self):
+        self.combo_model.setCurrentText(settings.get("model_size"))
+        self.combo_lang.setCurrentText(settings.get("language"))
+        
+        mode = settings.get("output_mode")
+        if mode == "paste":
+            self.radio_paste.setChecked(True)
+        else:
+            self.radio_clipboard.setChecked(True)
+            
+        self.chk_notifications.setChecked(settings.get("show_notifications", True))
+            
+        self.check_model_status()
+
+    # ... check_model_status ...
+
+    def save_settings(self):
+        model = self.combo_model.currentText()
+        
+        if self.btn_save.text().startswith("Download"):
+             # ... download logic ...
+             pass # (Code omitted for brevity in replace tool, assume user logic is consistent)
+
+        # ...
+        
+        settings.set("model_size", model)
+        settings.set("language", self.combo_lang.currentText())
+        settings.set("show_notifications", self.chk_notifications.isChecked())
+        
+        mode = "paste" if self.radio_paste.isChecked() else "clipboard"
+        settings.set("output_mode", mode)
+        
+        self.saved.emit()
+        self.close()
+
+    def check_model_status(self, text=None):
+        if not self.server:
+            return
+            
+        model = self.combo_model.currentText()
+        installed = self.server.get_downloaded_models()
+        
+        if model in installed:
+            self.lbl_model_status.setText("✓ Installed")
+            self.lbl_model_status.setStyleSheet("color: #00ff88; font-size: 10px;")
+            self.btn_delete.setEnabled(True)
+            self.btn_delete.setStyleSheet("") # Default
+            self.btn_save.setText("Save Settings")
+        else:
+            self.lbl_model_status.setText("⚠ Not Installed (Will download on save)")
+            self.lbl_model_status.setStyleSheet("color: #ffaa00; font-size: 10px;")
+            self.btn_delete.setEnabled(False)
+            self.btn_delete.setStyleSheet("opacity: 0.5;")
+            self.btn_save.setText("Download & Save")
+
+    def delete_current_model(self):
+        if not self.server: return
+        model = self.combo_model.currentText()
+        
+        reply = QMessageBox.question(self, "Confirm Delete", 
+                                   f"Are you sure you want to delete model '{model}'?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            success = self.server.delete_model(model)
+            if success:
+                self.check_model_status()
+            else:
+                QMessageBox.warning(self, "Error", "Failed to delete model.")
+
+    def save_settings(self):
+        model = self.combo_model.currentText()
+        
+        if self.btn_save.text().startswith("Download"):
+            # Trigger Download
+            dlg = DownloadDialog(self)
+            dlg.show()
+            QApplication.processEvents()
+            
+            import threading
+            self.download_success = False
+            
+            def run_download():
+                self.download_success = self.server.download_model(model)
+                
+            t = threading.Thread(target=run_download)
+            t.start()
+            
+            while t.is_alive():
+                QApplication.processEvents()
+                time.sleep(0.05)
+                
+            dlg.close()
+            
+            if not self.download_success:
+                QMessageBox.critical(self, "Download Failed", "Could not download model.")
+                return
+
+        settings.set("model_size", model)
+        settings.set("language", self.combo_lang.currentText())
+        
+        mode = "paste" if self.radio_paste.isChecked() else "clipboard"
+        settings.set("output_mode", mode)
+        
+        self.saved.emit()
+        self.close()
+
+import signal
+from overlay import OverlayWindow
+
+class SystemTrayApp:
+    def __init__(self, start_server_callback, stop_server_callback, server_instance=None):
+        self.app = QApplication(sys.argv)
+        self.app.setQuitOnLastWindowClosed(False)
+        
+        # Server reference for signals
+        self.server = server_instance
+        
+        # Handle Signals (Ctrl+C, etc.)
+        signal.signal(signal.SIGINT, self.handle_exit_signal)
+        signal.signal(signal.SIGTERM, self.handle_exit_signal)
+
+        # Python/Qt signal workaround:
+        # Let the interpreter run every 500ms so it can catch KeyboardInterrupt
+        self.keep_alive_timer = QTimer()
+        self.keep_alive_timer.timeout.connect(lambda: None)
+        self.keep_alive_timer.start(500)
+        
+        # Create Dummy Icon
+        self.tray_icon = QSystemTrayIcon()
+        
+        # Try multiple common icon names or fallback to a color
+        icon = QIcon.fromTheme("audio-input-microphone")
+        if icon.isNull():
+            icon = QIcon.fromTheme("microphone")
+        if icon.isNull():
+             # Fallback: Create a simple red pixmap
+            from PyQt6.QtGui import QPixmap, QPainter
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setBrush(QColor("red"))
+            painter.drawEllipse(0, 0, 16, 16)
+            painter.end()
+            icon = QIcon(pixmap)
+            
+        self.tray_icon.setIcon(icon)
+        self.tray_icon.setVisible(True)
+        self.tray_icon.setToolTip("uWhisper")
+
+        # Menu
+        self.menu = QMenu()
+        
+        self.status_action = QAction("Status: Running")
+        self.status_action.setEnabled(False)
+        self.menu.addAction(self.status_action)
+        self.menu.addSeparator()
+        
+        self.settings_action = QAction("Settings")
+        self.settings_action.triggered.connect(self.show_settings)
+        self.menu.addAction(self.settings_action)
+        
+        self.quit_action = QAction("Quit")
+        self.quit_action.triggered.connect(self.quit)
+        self.menu.addAction(self.quit_action)
+        
+        self.tray_icon.setContextMenu(self.menu)
+
+        # Windows
+        self.callbacks = {
+            "start": start_server_callback,
+            "stop": stop_server_callback
+        }
+
+        # Show Settings Window immediately on startup
+        self.settings_window = SettingsWindow(server=self.server)
+        self.settings_window.saved.connect(self.on_settings_saved)
+        self.show_settings()
+        
+        # Create Overlay Window
+        self.overlay = OverlayWindow()
+        
+        # Connect Signals if server exists
+        if self.server and hasattr(self.server, 'signals'):
+            self.server.signals.state_changed.connect(self.on_state_changed)
+            self.server.signals.amplitude_changed.connect(self.on_amplitude_changed)
+            self.server.signals.text_ready.connect(self.on_text_ready)
+
+    def on_state_changed(self, state):
+        if state == "recording":
+            self.overlay.show()
+            self.overlay.set_state("Recording", "Listening...")
+        elif state == "transcribing":
+            self.overlay.show()
+            self.overlay.set_state("Transcribing", "Processing...")
+        elif state == "idle":
+            # Just wait a bit then hide? Or hide immediately?
+            # Usually 'text_ready' handles the success state
+            QTimer.singleShot(2000, self.overlay.hide)
+
+    def on_amplitude_changed(self, level):
+        # print(f"GUI Amp: {level}") 
+        self.overlay.update_amplitude(level)
+
+    def on_text_ready(self, text):
+        self.overlay.set_state("Done", f"Success")
+        # Hide quickly so we can paste
+        QTimer.singleShot(800, self.overlay.hide)
+    
+    def show_settings(self):
+        if not self.settings_window:
+            self.settings_window = SettingsWindow(server=self.server)
+            self.settings_window.saved.connect(self.on_settings_saved)
+        self.settings_window.show()
+        self.settings_window.raise_()
+        self.settings_window.activateWindow()
+
+    def on_settings_saved(self):
+        print("Settings saved.")
+
+    def handle_exit_signal(self, signum, frame):
+        print(f"Received signal {signum}. Quitting...")
+        self.quit()
+
+    def run(self):
+        sys.exit(self.app.exec())
+
+    def quit(self):
+        if self.callbacks["stop"]:
+            self.callbacks["stop"]()
+        self.tray_icon.hide()
+        self.app.quit()
+
+if __name__ == "__main__":
+    # Test run
+    app = SystemTrayApp(None, None)
+    app.run()
