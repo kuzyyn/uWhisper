@@ -3,7 +3,10 @@
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if command -v uwhisper &> /dev/null; then
+if command -v uwhisper-trigger &> /dev/null; then
+    echo "Found 'uwhisper-trigger' in system PATH. Using it for shortcut."
+    TRIGGER_CMD="uwhisper-trigger"
+elif command -v uwhisper &> /dev/null; then
     echo "Found 'uwhisper' in system PATH. Using it for shortcut."
     TRIGGER_CMD="uwhisper --trigger"
 else

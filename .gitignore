@@ -2,4 +2,6 @@ venv/
 __pycache__/
 build/
 dist/
+deb_build/
 uwhisper.spec
+uwhisper-trigger.spec

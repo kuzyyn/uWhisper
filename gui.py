@@ -3,7 +3,7 @@ import time
 import threading
 from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QWidget, QVBoxLayout, 
                             QLabel, QComboBox, QPushButton, QRadioButton, QGroupBox, QHBoxLayout, QFrame,
-                            QDialog, QProgressBar, QMessageBox, QCheckBox)
+                            QDialog, QProgressBar, QMessageBox, QCheckBox, QFileDialog, QLineEdit)
 from PyQt6.QtGui import QIcon, QAction, QFont, QColor, QPalette
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
 from config_manager import settings
@@ -101,7 +101,7 @@ class SettingsWindow(QWidget):
         super().__init__()
         self.server = server
         self.setWindowTitle("uWhisper Settings")
-        self.setFixedSize(450, 350) # Taller for more controls
+        self.setMinimumSize(450, 500) # Increased height and made resizable
         self.setup_ui()
         self.load_settings()
 
@@ -166,6 +166,28 @@ class SettingsWindow(QWidget):
         self.chk_notifications.setToolTip("Enable standard desktop bubbles (notify-send)")
         form_layout.addWidget(self.chk_notifications)
         
+        # Logging
+        log_group = QGroupBox("Logging")
+        log_layout = QVBoxLayout()
+        
+        self.chk_logging = QCheckBox("Enable Logging")
+        log_layout.addWidget(self.chk_logging)
+        
+        log_path_layout = QHBoxLayout()
+        self.txt_log_dir = QLineEdit()
+        self.txt_log_dir.setPlaceholderText("/tmp/uwhisper_logs")
+        self.btn_browse_log = QPushButton("...")
+        self.btn_browse_log.setFixedWidth(40)
+        self.btn_browse_log.clicked.connect(self.browse_log_dir)
+        
+        log_path_layout.addWidget(self.txt_log_dir)
+        log_path_layout.addWidget(self.btn_browse_log)
+        
+        log_layout.addLayout(log_path_layout)
+        log_group.setLayout(log_layout)
+        
+        form_layout.addWidget(log_group)
+        
         layout.addWidget(form_frame)
 
         # Save Button
@@ -188,29 +210,20 @@ class SettingsWindow(QWidget):
             self.radio_clipboard.setChecked(True)
             
         self.chk_notifications.setChecked(settings.get("show_notifications", True))
+        
+        self.chk_logging.setChecked(settings.get("enable_logging", True))
+        self.txt_log_dir.setText(settings.get("log_dir", ""))
             
         self.check_model_status()
 
     # ... check_model_status ...
 
-    def save_settings(self):
-        model = self.combo_model.currentText()
-        
-        if self.btn_save.text().startswith("Download"):
-             # ... download logic ...
-             pass # (Code omitted for brevity in replace tool, assume user logic is consistent)
 
-        # ...
-        
-        settings.set("model_size", model)
-        settings.set("language", self.combo_lang.currentText())
-        settings.set("show_notifications", self.chk_notifications.isChecked())
-        
-        mode = "paste" if self.radio_paste.isChecked() else "clipboard"
-        settings.set("output_mode", mode)
-        
-        self.saved.emit()
-        self.close()
+
+    def browse_log_dir(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Log Directory")
+        if path:
+            self.txt_log_dir.setText(path)
 
     def check_model_status(self, text=None):
         if not self.server:
@@ -277,6 +290,10 @@ class SettingsWindow(QWidget):
 
         settings.set("model_size", model)
         settings.set("language", self.combo_lang.currentText())
+        settings.set("show_notifications", self.chk_notifications.isChecked())
+        
+        settings.set("enable_logging", self.chk_logging.isChecked())
+        settings.set("log_dir", self.txt_log_dir.text())
         
         mode = "paste" if self.radio_paste.isChecked() else "clipboard"
         settings.set("output_mode", mode)

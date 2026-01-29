@@ -23,7 +23,9 @@ DEFAULT_CONFIG = {
     "language": "en",
     "output_mode": "clipboard",  # clipboard, paste, type
     "theme": "dark",
-    "show_notifications": True
+    "show_notifications": True,
+    "log_dir": "/tmp/uwhisper_logs",
+    "enable_logging": True
 }
 
 class SettingsManager:

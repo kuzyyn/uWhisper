@@ -23,4 +23,19 @@ pyinstaller --onefile \
             --hidden-import=PyQt6 \
             main.py
 
-echo "Build complete! Executable is in dist/uwhisper"
+echo "Building uwhisper-trigger..."
+
+# Build lightweight trigger
+# We exclude heavy modules explicitly to ensure it stays small and starts fast
+pyinstaller --onefile \
+            --clean \
+            --name uwhisper-trigger \
+            --exclude-module=PyQt6 \
+            --exclude-module=torch \
+            --exclude-module=numpy \
+            --exclude-module=faster_whisper \
+            client.py
+
+echo "Build complete!"
+echo "Main Executable: dist/uwhisper"
+echo "Trigger Executable: dist/uwhisper-trigger"

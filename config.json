@@ -2,8 +2,10 @@
     "model_size": "small",
     "device": "cpu",
     "compute_type": "int8",
-    "language": "en",
+    "language": "pl",
     "output_mode": "paste",
     "theme": "dark",
-    "show_notifications": true
+    "show_notifications": true,
+    "log_dir": "/tmp/uwhisper_test_logs",
+    "enable_logging": true
 }

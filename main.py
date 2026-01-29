@@ -8,10 +8,37 @@ import socket
 # Ensure we can find our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import logging
 from config_manager import settings
+from config import SOCKET_PATH
+
+def setup_logging():
+    if not settings.get("enable_logging", True):
+        return
+
+    log_dir = settings.get("log_dir", "/tmp/uwhisper_logs")
+    if not log_dir:
+        log_dir = "/tmp/uwhisper_logs"
+
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "uwhisper.log")
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        logging.info(f"Logging initialized. Writing to {log_file}")
+    except Exception as e:
+        print(f"Failed to setup logging: {e}")
+
 
 def is_server_running():
-    socket_path = "/tmp/uwhisper.sock"
+    socket_path = SOCKET_PATH
     if not os.path.exists(socket_path):
         return False
     try:
@@ -45,6 +72,8 @@ def main():
     parser.add_argument("--trigger", action="store_true", help="Trigger recording/transcription (Client)")
     
     args = parser.parse_args()
+    
+    setup_logging()
 
     if args.trigger:
         import client
@@ -60,6 +89,8 @@ def main():
 
     if args.server:
         # Headless mode
+        logging.info("Starting in HEADLESS server mode (No GUI/Icon).")
+        logging.info("Run without --server (or with --gui) to see the System Tray Icon and Settings.")
         import server
         s = server.WhisperServer()
         s.start()

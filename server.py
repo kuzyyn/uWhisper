@@ -1,4 +1,5 @@
 import os
+import logging
 import socket
 import threading
 import queue
@@ -8,6 +9,7 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 from config_manager import settings
+from config import SOCKET_PATH
 from signals import ServerSignals
 
 class WhisperServer:
@@ -27,7 +29,7 @@ class WhisperServer:
         self.current_language = None
         
         # Ensure socket cleanup
-        socket_path = "/tmp/uwhisper.sock"
+        socket_path = SOCKET_PATH
         if os.path.exists(socket_path):
             os.remove(socket_path)
 
@@ -40,16 +42,16 @@ class WhisperServer:
         if self.model and self.current_model_size == desired_size:
             return
 
-        print(f"Loading Whisper model ({desired_size}) on {device}...")
+        logging.info(f"Loading Whisper model ({desired_size}) on {device}...")
         self.notify("System", f"Loading model ({desired_size})...")
         
         try:
             self.model = WhisperModel(desired_size, device=device, compute_type=compute_type)
             self.current_model_size = desired_size
-            print("Model loaded successfully.")
+            logging.info("Model loaded successfully.")
             self.notify("System", "Model loaded. Ready.")
         except Exception as e:
-            print(f"Error loading model: {e}")
+            logging.error(f"Error loading model: {e}")
             self.notify("Error", f"Failed to load model: {e}")
 
     def notify(self, title, message):
@@ -60,9 +62,9 @@ class WhisperServer:
         try:
             process = subprocess.Popen(['wl-copy'], stdin=subprocess.PIPE)
             process.communicate(input=text.encode('utf-8'))
-            print(f"Copied to clipboard: {text}")
+            logging.info(f"Copied to clipboard: {text}")
         except Exception as e:
-            print(f"Clipboard error: {e}")
+            logging.error(f"Clipboard error: {e}")
 
     def audio_callback(self, indata, frames, time, status):
         # if status:
@@ -97,7 +99,7 @@ class WhisperServer:
                     models.append(model_name)
             return models
         except Exception as e:
-            print(f"Error listing models: {e}")
+            logging.error(f"Error listing models: {e}")
             return []
 
     def delete_model(self, model_size):
@@ -110,25 +112,25 @@ class WhisperServer:
             
             if os.path.exists(full_path):
                 shutil.rmtree(full_path)
-                print(f"Deleted model: {model_size}")
+                logging.info(f"Deleted model: {model_size}")
                 return True
             return False
         except Exception as e:
-            print(f"Error deleting model: {e}")
+            logging.error(f"Error deleting model: {e}")
             return False
 
     def download_model(self, model_size):
         """Download model in a blocking way (run in thread)"""
         try:
-            print(f"Downloading {model_size}...")
+            logging.info(f"Downloading {model_size}...")
             # dry_run=False effectively downloads it
             # We just init the model path download utilizing the library
             from faster_whisper import download_model
             download_model(model_size)
-            print("Download complete.")
+            logging.info("Download complete.")
             return True
         except Exception as e:
-            print(f"Download error: {e}")
+            logging.error(f"Download error: {e}")
             return False
 
     def record_loop(self):
@@ -137,7 +139,7 @@ class WhisperServer:
                 time.sleep(0.1)
 
     def cancel_recording(self):
-        print("Cancellation requested.")
+        logging.info("Cancellation requested.")
         self.recording = False
         self.abort_transcription = True
         # Clear queue
@@ -147,7 +149,7 @@ class WhisperServer:
 
     def process_audio(self):
         if self.abort_transcription:
-            print("Transcription aborted.")
+            logging.info("Transcription aborted.")
             self.abort_transcription = False
             self.signals.state_changed.emit("idle")
             return
@@ -165,7 +167,7 @@ class WhisperServer:
         audio_np = np.concatenate(audio_data, axis=0)
         audio_np = audio_np.flatten().astype(np.float32)
 
-        print("Transcribing...")
+        logging.info("Transcribing...")
         self.load_model() # Check if model needs reloading
         
         try:
@@ -179,7 +181,7 @@ class WhisperServer:
             text_parts = []
             for segment in segments:
                 if self.abort_transcription:
-                    print("Transcription aborted during segment processing.")
+                    logging.warning("Transcription aborted during segment processing.")
                     break
                 text_parts.append(segment.text)
             
@@ -191,7 +193,7 @@ class WhisperServer:
             text = " ".join(text_parts).strip()
             
             if text:
-                print(f"Transcription: {text}")
+                logging.info(f"Transcription: {text}")
                 self.signals.text_ready.emit(text)
                 self.copy_to_clipboard(text)
                 
@@ -224,24 +226,24 @@ class WhisperServer:
                              ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)
                              ui.syn()
                              
-                         print("Simulated Ctrl+V (evdev)")
+                         logging.info("Simulated Ctrl+V (evdev)")
                          paste_success = True
                      except ImportError:
-                         print("evdev module not found.")
+                         logging.warning("evdev module not found.")
                      except Exception as e:
                          # print(f"evdev failed: {e}")
                          pass
 
                      if not paste_success:
                          self.notify("Paste Failed", "Input simulation failed. Check permissions.")
-                         print("All paste methods failed.")
+                         logging.error("All paste methods failed.")
 
                 # self.notify("Transcription Complete", f"Copied: {text}")
             else:
                 self.notify("Status", "No speech detected.")
                 
         except Exception as e:
-            print(f"Transcription error: {e}")
+            logging.error(f"Transcription error: {e}")
             self.notify("Error", f"Transcription failed: {e}")
             
         self.signals.state_changed.emit("idle")
@@ -253,19 +255,19 @@ class WhisperServer:
                 current_time = time.time()
                 # 500ms debounce
                 if hasattr(self, 'last_toggle_time') and (current_time - self.last_toggle_time < 0.5):
-                    print("Debounced toggle request.")
+                    logging.debug("Debounced toggle request.")
                     return
 
                 self.last_toggle_time = current_time
 
                 if self.recording:
-                    print("Stopping recording...")
+                    logging.info("Stopping recording...")
                     self.recording = False
                     # self.notify("uWhisper", "Processing...")
                     # Overlay handles "Processing" state
                     threading.Thread(target=self.process_audio).start()
                 else:
-                    print("Starting recording...")
+                    logging.info("Starting recording...")
                     self.abort_transcription = False
                     with self.audio_queue.mutex:
                         self.audio_queue.queue.clear()
@@ -274,7 +276,7 @@ class WhisperServer:
                     # self.notify("uWhisper", "Recording started...")
                     # Overlay handles "Recording" state
         except Exception as e:
-            print(f"Socket error: {e}")
+            logging.error(f"Socket error: {e}")
         finally:
             conn.close()
 
@@ -285,7 +287,7 @@ class WhisperServer:
         
         threading.Thread(target=self.record_loop, daemon=True).start()
 
-        socket_path = "/tmp/uwhisper.sock"
+        socket_path = SOCKET_PATH
         server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server_sock.bind(socket_path)
         server_sock.listen(1)
@@ -297,7 +299,7 @@ class WhisperServer:
                 conn, _ = server_sock.accept()
                 self.handle_client(conn)
         except Exception as e:
-            print(f"Server error: {e}")
+            logging.error(f"Server error: {e}")
         finally:
             self.running = False
             if os.path.exists(socket_path):

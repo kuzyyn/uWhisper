@@ -24,19 +24,35 @@ sudo apt-get install -y libportaudio2 wl-copy libnotify-bin
 The easiest way to install uWhisper is to download the latest release.
 
 1.  **Download**:
-    Go to the [Releases page](../../releases) and download:
-    - `uwhisper` (The executable)
-    - `uwhisper.desktop` (System menu shortcut)
+    Go to the [Releases page](../../releases) and download `uwhisper_1.0.0_amd64.deb`.
 
-2.  **Install Binary**:
-    Make the file executable and move it to your system path:
+2.  **Install**:
+    Run the following command to install the application, dependencies, and set up the shortcut automatically:
     ```bash
-    chmod +x uwhisper
+    sudo dpkg -i uwhisper_1.0.0_amd64.deb
+    sudo apt --fix-broken install  # Run this if there are any dependency errors
+    ```
+
+3.  **Verify Shortcut**:
+    The installation attempts to set `Ctrl+Space` as the global shortcut. Try pressing it!
+    *   If it doesn't work, go to **Settings -> Keyboard -> Shortcuts** and add it manually:
+        *   **Command**: `uwhisper-trigger`
+        *   **Shortcut**: `Ctrl+Space`
+
+### Manual Installation (Advanced)
+If you prefer not to use the `.deb` file, you can install the binaries manually.
+
+1.  **Download**:
+    Download `uwhisper`, `uwhisper-trigger`, and `uwhisper.desktop` from releases.
+
+2.  **Install Binaries**:
+    ```bash
+    chmod +x uwhisper uwhisper-trigger
     sudo cp uwhisper /usr/local/bin/uwhisper
+    sudo cp uwhisper-trigger /usr/local/bin/uwhisper-trigger
     ```
 
 3.  **Install Desktop Shortcut**:
-    Enables the app to appear in your system menu:
     ```bash
     cp uwhisper.desktop ~/.local/share/applications/
     ```
@@ -46,7 +62,7 @@ The easiest way to install uWhisper is to download the latest release.
     
     *   **Settings Path**: Settings -> Keyboard -> View and Customize Shortcuts -> Custom Shortcuts -> Add New.
     *   **Name**: uWhisper
-    *   **Command**: `uwhisper --trigger`
+    *   **Command**: `uwhisper-trigger`
     *   **Shortcut**: `Ctrl+Space` (or your preferred key)
 
     *Alternatively, if you downloaded the source or `setup_shortcut.sh`, you can run it to attempt automatic configuration.*
@@ -66,7 +82,17 @@ If you prefer to build the executable yourself:
     ```bash
     ./build.sh
     ```
-    The executable will be created in `dist/uwhisper`. Follow steps 2 and 3 above to install it.
+    The executables will be created in `dist/`:
+    - `dist/uwhisper` (Main App)
+    - `dist/uwhisper-trigger` (Shortcut Trigger)
+    
+    Follow steps 2 and 3 above to install them.
+    
+    *Alternatively, you can build the .deb package yourself:*
+    ```bash
+    ./build_deb.sh
+    ```
+    The `.deb` file will be created in `deb_build/`.
 
 ## Development Setup
 
@@ -78,16 +104,29 @@ python3 -m venv venv
 ```
 
 ## Usage
+    
+1. **Start the Application** (GUI + Tray Icon):
+   ```bash
+   ./venv/bin/python main.py
+   ```
+   *This will show the microphone icon in your system tray where you can access Settings.*
 
-1. **Start the Server** (Background process):
+2. **Trigger Recording** (Global Shortcut):
+   
+   Once the app is running, press your configured shortcut (e.g., `Ctrl+Space`) to toggle recording.
+   
+   *Alternatively, you can trigger it manually:*
+   ```bash
+   ./venv/bin/python main.py --trigger
+   ```
+
+3. **Headless Server** (Advanced):
+   
+   If you want to run without the GUI (e.g., as a background service):
    ```bash
    ./venv/bin/python main.py --server
    ```
 
-2. **Trigger Recording** (Client):
-   ```bash
-   ./venv/bin/python main.py --trigger
-   ```
 
 
 
