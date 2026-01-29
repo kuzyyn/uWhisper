@@ -80,19 +80,20 @@ If you prefer to build the executable yourself:
 
 2.  **Build**:
     ```bash
-    ./build.sh
+    ./build_release.sh
     ```
     The executables will be created in `dist/`:
     - `dist/uwhisper` (Main App)
     - `dist/uwhisper-trigger` (Shortcut Trigger)
+    - `dist/uwhisper.desktop` (System Menu Integration)
     
     Follow steps 2 and 3 above to install them.
     
     *Alternatively, you can build the .deb package yourself:*
     ```bash
-    ./build_deb.sh
+    ./build_release.sh
     ```
-    The `.deb` file will be created in `deb_build/`.
+    The `.deb` file will be created in `dist/`.
 
 ## Development Setup
 
@@ -107,7 +108,7 @@ python3 -m venv venv
     
 1. **Start the Application** (GUI + Tray Icon):
    ```bash
-   ./venv/bin/python main.py
+   ./venv/bin/python src/main.py
    ```
    *This will show the microphone icon in your system tray where you can access Settings.*
 
@@ -124,7 +125,7 @@ python3 -m venv venv
    
    If you want to run without the GUI (e.g., as a background service):
    ```bash
-   ./venv/bin/python main.py --server
+   ./venv/bin/python src/main.py --server
    ```
 
 

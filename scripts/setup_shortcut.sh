@@ -11,8 +11,8 @@ elif command -v uwhisper &> /dev/null; then
     TRIGGER_CMD="uwhisper --trigger"
 else
     echo "Using local development environment."
-    PYTHON_EX="$SCRIPT_DIR/venv/bin/python"
-    MAIN_SCRIPT="$SCRIPT_DIR/main.py"
+    PYTHON_EX="$SCRIPT_DIR/../venv/bin/python"
+    MAIN_SCRIPT="$SCRIPT_DIR/../src/main.py"
     TRIGGER_CMD="$PYTHON_EX $MAIN_SCRIPT --trigger"
 fi
 

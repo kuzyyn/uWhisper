@@ -1,20 +1,24 @@
-#!/bin/bash
-
 # Configuration
 VERSION="1.0.0"
 ARCH="amd64"
 PACKAGE_NAME="uwhisper"
-BUILD_ROOT="deb_build"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Use build/deb for staging to keep root clean
+BUILD_ROOT="$PROJECT_ROOT/build/deb"
 STAGING_DIR="$BUILD_ROOT/$PACKAGE_NAME"
-DIST_DIR="dist"
+DIST_DIR="$PROJECT_ROOT/dist"
 
 # Ensure executables exist
 if [ ! -f "$DIST_DIR/uwhisper" ] || [ ! -f "$DIST_DIR/uwhisper-trigger" ]; then
-    echo "Error: Binaries not found in $DIST_DIR. Please run ./build.sh first."
+    echo "Error: Binaries not found in $DIST_DIR. Please run build.sh first."
     exit 1
 fi
 
 echo "Creating Debian package structure..."
+# We clean only the deb part, assuming build.sh already ran and populated build/
 rm -rf "$BUILD_ROOT"
 mkdir -p "$STAGING_DIR/DEBIAN"
 mkdir -p "$STAGING_DIR/usr/local/bin"
@@ -29,7 +33,7 @@ chmod 755 "$STAGING_DIR/usr/local/bin/uwhisper-trigger"
 
 echo "Copying desktop file..."
 # Ensure the Exec path in desktop file is correct for global install
-sed 's|Exec=.*|Exec=/usr/local/bin/uwhisper|' uwhisper.desktop > "$STAGING_DIR/usr/share/applications/uwhisper.desktop"
+sed 's|Exec=.*|Exec=/usr/local/bin/uwhisper|' "$SCRIPT_DIR/uwhisper.desktop" > "$STAGING_DIR/usr/share/applications/uwhisper.desktop"
 
 # Create Control File
 echo "Creating control file..."
@@ -105,6 +109,6 @@ EOF
 chmod 755 "$STAGING_DIR/DEBIAN/postinst"
 
 echo "Building .deb..."
-dpkg-deb --build "$STAGING_DIR" "${BUILD_ROOT}/${PACKAGE_NAME}_${VERSION}_${ARCH}.deb"
+dpkg-deb --build "$STAGING_DIR" "${DIST_DIR}/${PACKAGE_NAME}_${VERSION}_${ARCH}.deb"
 
-echo "Done! Package created: ${BUILD_ROOT}/${PACKAGE_NAME}_${VERSION}_${ARCH}.deb"
+echo "Done! Package created: ${DIST_DIR}/${PACKAGE_NAME}_${VERSION}_${ARCH}.deb"
