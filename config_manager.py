@@ -2,7 +2,19 @@ import json
 import os
 from typing import Dict, Any
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+import sys
+
+if getattr(sys, 'frozen', False):
+    # If the application is run as a bundle, the PyInstaller bootloader
+    # extends the sys module by a flag frozen=True and sets the app 
+    # path into variable _MEIPASS'.
+    # However, for config, we usually want it next to the executable, 
+    # not in the temp _MEIPASS folder.
+    application_path = os.path.dirname(sys.executable)
+else:
+    application_path = os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_FILE = os.path.join(application_path, "config.json")
 
 DEFAULT_CONFIG = {
     "model_size": "base",

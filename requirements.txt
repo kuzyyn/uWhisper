@@ -6,3 +6,4 @@ pyperclip
 keyboard
 pydbus
 PyQt6
+pyinstaller

@@ -2,9 +2,16 @@
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_EX="$SCRIPT_DIR/venv/bin/python"
-MAIN_SCRIPT="$SCRIPT_DIR/main.py"
-TRIGGER_CMD="$PYTHON_EX $MAIN_SCRIPT --trigger"
+
+if command -v uwhisper &> /dev/null; then
+    echo "Found 'uwhisper' in system PATH. Using it for shortcut."
+    TRIGGER_CMD="uwhisper --trigger"
+else
+    echo "Using local development environment."
+    PYTHON_EX="$SCRIPT_DIR/venv/bin/python"
+    MAIN_SCRIPT="$SCRIPT_DIR/main.py"
+    TRIGGER_CMD="$PYTHON_EX $MAIN_SCRIPT --trigger"
+fi
 
 echo "uWhisper Shortcut Setup"
 echo "======================="

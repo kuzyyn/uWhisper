@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=0.0.1
+Type=Application
+Name=uWhisper
+Comment=Local Voice-to-Text
+Exec=/usr/local/bin/uwhisper --gui
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;Audio;
+Keywords=voice;text;whisper;transcribe;dictate;speech;microphone;ai;
