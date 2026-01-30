@@ -237,49 +237,21 @@ class WhisperServer:
 
             if text:
                 logging.info(f"Transcription: {text}")
-                self.signals.text_ready.emit(text)
                 self.copy_to_clipboard(text)
+                self.signals.text_ready.emit(text)
                 
                 # Check output mode
                 mode = settings.get("output_mode")
                 if mode == "paste":
-                     # Simulate Paste
-                     # Wait for overlay to disappear (it stays for 800ms)
-                     time.sleep(1.0)
-                     
-                     paste_success = False
-
-                     # Method 1: evdev (Native uinput)
-                     try:
-                         from evdev import UInput, ecodes
-                         # Create a virtual keyboard
-                         with UInput() as ui:
-                             # Press Ctrl
-                             ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 1)
-                             # Press V
-                             ui.write(ecodes.EV_KEY, ecodes.KEY_V, 1)
-                             # Sync
-                             ui.syn()
-                             
-                             time.sleep(0.05)
-                             
-                             # Release V
-                             ui.write(ecodes.EV_KEY, ecodes.KEY_V, 0)
-                             # Release Ctrl
-                             ui.write(ecodes.EV_KEY, ecodes.KEY_LEFTCTRL, 0)
-                             ui.syn()
-                             
-                         logging.info("Simulated Ctrl+V (evdev)")
-                         paste_success = True
-                     except ImportError:
-                         logging.warning("evdev module not found.")
-                     except Exception as e:
-                         # print(f"evdev failed: {e}")
-                         pass
-
-                     if not paste_success:
-                         self.notify("Paste Failed", "Input simulation failed. Check permissions.")
-                         logging.error("All paste methods failed.")
+                     # If headless, we need to handle paste here (blindly)
+                     if self.headless:
+                         from input_simulator import simulate_ctrl_v
+                         time.sleep(0.5) # Slight safety delay for headless
+                         if not simulate_ctrl_v():
+                             self.notify("Paste Failed", "Input simulation failed.")
+                     else:
+                         # GUI mode: Let GUI handle the pasting after hiding overlay to manage focus
+                         pass 
 
                 # self.notify("Transcription Complete", f"Copied: {text}")
             else:

@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QWidget, QVBo
 from PyQt6.QtGui import QIcon, QAction, QFont, QColor, QPalette
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
 from config_manager import settings
+from input_simulator import simulate_ctrl_v
+
 
 # --- Modern Dark StyleSheet ---
 STYLESHEET = """
@@ -577,8 +579,10 @@ class SystemTrayApp:
 
     def on_state_changed(self, state):
         if state == "recording":
+            self.overlay.set_focusable(True) # Ensure we can catch ESC
             self.overlay.show()
             self.overlay.set_state("Recording", "Listening...")
+
         elif state == "loading":
             self.overlay.show()
             self.overlay.set_state("Loading", "Loading Model...")
@@ -595,10 +599,30 @@ class SystemTrayApp:
         self.overlay.update_amplitude(level)
 
     def on_text_ready(self, text):
-
         self.overlay.set_state("Done", f"Success")
-        # Hide quickly so we can paste
+        
+        # Release focus immediately so we can paste into the target window
+        self.overlay.set_focusable(False) 
+        QApplication.processEvents()
+        
+        # Robustness: Wait for window to actually lose focus (Max 1s)
+        # This avoids race conditions where the OS hasn't switched focus yet
+        start = time.time()
+        while self.overlay.isActiveWindow() and (time.time() - start < 1.0):
+             QApplication.processEvents()
+             time.sleep(0.01) # Small yielding sleep to prevent 100% CPU in the loop
+
+        # Check if we should paste
+        mode = settings.get("output_mode")
+        if mode == "paste":
+            # Attempt paste immediately
+            simulate_ctrl_v()
+
+
+        # Hide quickly but visible enough to see "Success"
+        # Since we are non-focusable and transparent-for-mouse (mostly), it shouldn't block interaction much
         QTimer.singleShot(800, self.overlay.hide)
+
 
     
     def show_settings(self):

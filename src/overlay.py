@@ -11,9 +11,21 @@ class OverlayWindow(QWidget):
         super().__init__()
         # Window Flags: Frameless, On Top, Tool
         # We remove WindowDoesNotAcceptFocus to allow catching ESC key
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | 
-                            Qt.WindowType.WindowStaysOnTopHint | 
-                            Qt.WindowType.Tool)
+        # Window Flags: Frameless, On Top, Tool
+        # Initial flags
+        self.base_flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
+        self.setWindowFlags(self.base_flags)
+
+    def set_focusable(self, focusable: bool):
+        if not focusable:
+            self.setWindowFlags(self.base_flags | Qt.WindowType.WindowDoesNotAcceptFocus)
+        else:
+            self.setWindowFlags(self.base_flags)
+        # We need to show again to apply flag changes, but we want to avoid flickering if possible
+        # Typically flags change requires hide/show, but let's try just setWindowFlags + show
+        if self.isVisible():
+             self.show()
+
         
         # Transparent Background & Click-through
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
