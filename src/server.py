@@ -37,6 +37,9 @@ class WhisperServer:
             if current_settings.get("type") != backend:
                 logging.info(f"Switching backend from {current_settings.get('type')} to {backend}")
                 self.model = None
+            elif backend == "parakeet_tdt" and current_settings.get("variant") != settings.get("parakeet_variant"):
+                 logging.info(f"Switching Parakeet variant from {current_settings.get('variant')} to {settings.get('parakeet_variant')}")
+                 self.model = None
 
         if not self.model:
             logging.info(f"Initializing backend: {backend}")

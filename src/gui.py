@@ -77,22 +77,54 @@ STYLESHEET = """
 """
 
 class DownloadDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, target_dir=None, expected_size_mb=670):
         super().__init__(parent)
         self.setWindowTitle("Downloading Model")
         self.setFixedSize(300, 100)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
+        self.target_dir = target_dir
+        self.expected_size_mb = expected_size_mb
         
         layout = QVBoxLayout()
-        self.label = QLabel("Downloading model... This may take a while.")
+        self.label = QLabel(f"Downloading model...\nTarget: ~{expected_size_mb} MB")
         self.label.setWordWrap(True)
         layout.addWidget(self.label)
         
         self.progress = QProgressBar()
-        self.progress.setRange(0, 0) # Indeterminate
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
         layout.addWidget(self.progress)
         
         self.setLayout(layout)
+        
+        # Start Polling
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.poll_progress)
+        self.timer.start(500) # Check every 500ms
+
+    def poll_progress(self):
+        if not self.target_dir:
+            return
+            
+        try:
+             import os
+             total_size = 0
+             if os.path.exists(self.target_dir):
+                 for dirpath, dirnames, filenames in os.walk(self.target_dir):
+                     for f in filenames:
+                         fp = os.path.join(dirpath, f)
+                         # skip incomplete extensions if any, usually huggingface uses temp names but eventually renames
+                         # just counting all bytes in folder is a good approximation
+                         total_size += os.path.getsize(fp)
+             
+             size_mb = total_size / (1024 * 1024)
+             percent = int((size_mb / self.expected_size_mb) * 100)
+             if percent > 100: percent = 99 # clamping until actual success
+
+             self.progress.setValue(percent)
+             self.label.setText(f"Downloaded: {size_mb:.1f} MB / ~{self.expected_size_mb} MB")
+        except Exception:
+             pass
 
 class SettingsWindow(QWidget):
     saved = pyqtSignal()
@@ -145,6 +177,20 @@ class SettingsWindow(QWidget):
         
         form_layout.addWidget(lbl_model)
         form_layout.addLayout(model_row)
+        
+        # Parakeet Variant (Hidden by default)
+        self.lbl_variant = QLabel("Model Variant:")
+        self.combo_variant = QComboBox()
+        self.combo_variant.addItem("English (Fast & Accurate)", "v2_en")
+        self.combo_variant.addItem("Multilingual (25 Languages)", "v3_multi")
+        self.combo_variant.currentTextChanged.connect(self.check_model_status)
+        
+        form_layout.addWidget(self.lbl_variant)
+        form_layout.addWidget(self.combo_variant)
+        
+        # Hide initially (will trigger update in load_settings)
+        self.lbl_variant.hide()
+        self.combo_variant.hide()
         
         self.lbl_model_status = QLabel("")
         self.lbl_model_status.setStyleSheet("color: #888; font-size: 10px;")
@@ -211,6 +257,12 @@ class SettingsWindow(QWidget):
         self.combo_backend.setCurrentText(backend)
         self.update_model_options(backend) # Populate models first
 
+        # Restore variant selection
+        saved_variant = settings.get("parakeet_variant", "v2_en")
+        index = self.combo_variant.findData(saved_variant)
+        if index >= 0:
+            self.combo_variant.setCurrentIndex(index)
+
         saved_size = settings.get("model_size")
         # Handle migration/display name match
         if backend == "faster_whisper" and saved_size and "whisper" not in saved_size:
@@ -249,10 +301,18 @@ class SettingsWindow(QWidget):
                  self.combo_model.setCurrentText(f"whisper {current_model}")
             elif current_model:
                  self.combo_model.setCurrentText(current_model)
+            
+            # Hide variant for whisper
+            self.lbl_variant.hide()
+            self.combo_variant.hide()
                  
         elif backend == "parakeet_tdt":
             self.combo_model.addItems(["parakeet-tdt-0.6b"])
             self.combo_model.setCurrentIndex(0)
+            
+            # Show variant for parakeet
+            self.lbl_variant.show()
+            self.combo_variant.show()
             
         self.combo_model.blockSignals(False)
         self.check_model_status()
@@ -292,7 +352,12 @@ class SettingsWindow(QWidget):
              # Let's assume server has a generic check method or we check the specific cache dir.
              # Since GUI runs in same env:
              import os
-             cache_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model")
+             variant = self.combo_variant.currentData() # v2_en or v3_multi
+             if variant == "v3_multi":
+                 cache_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model_v3")
+             else:
+                 cache_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model")
+                 
              required_files = ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]
              is_installed = all(os.path.exists(os.path.join(cache_dir, f)) for f in required_files)
 
@@ -331,11 +396,61 @@ class SettingsWindow(QWidget):
                 QMessageBox.warning(self, "Error", "Failed to delete model.")
 
     def save_settings(self):
-        model = self.combo_model.currentText()
+        # Update settings first so download uses correct values
+        settings.set("model_backend", self.combo_backend.currentText())
+        settings.set("parakeet_variant", self.combo_variant.currentData())
         
+        model = self.combo_model.currentText()
+        settings.set("language", self.combo_lang.currentText())
+        settings.set("show_notifications", self.chk_notifications.isChecked())
+        settings.set("enable_logging", self.chk_logging.isChecked())
+        settings.set("log_dir", self.txt_log_dir.text())
+        
+        mode = "paste" if self.radio_paste.isChecked() else "clipboard"
+        settings.set("output_mode", mode)
+        
+        # Clean model name for storage/usage
+        clean_model = model
+        if self.combo_backend.currentText() == "faster_whisper":
+            if model.startswith("whisper "):
+                clean_model = model.replace("whisper ", "")
+        settings.set("model_size", clean_model)
+
         if self.btn_save.text().startswith("Download"):
+            # Determine target for progress bar
+            import os
+            import os
+            backend_type = self.combo_backend.currentText()
+            
+            if backend_type == "parakeet_tdt":
+                target_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model") # Default v2
+                expected_size = 641 # Approx for V2/V3 (Real size on disk is ~641 MiB)
+                
+                variant = settings.get("parakeet_variant")
+                if variant == "v3_multi":
+                     target_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model_v3")
+                     expected_size = 641
+            else:
+                # Faster Whisper
+                # Mapping of approx sizes in MiB
+                # tiny: ~72MB, base: ~140MB, small: ~460MB, medium: ~1.4GB, large-v3: ~2.9GB
+                size_map = {
+                    "tiny": 75,
+                    "base": 145,
+                    "small": 490,
+                    "medium": 1500,
+                    "large-v3": 3000
+                }
+                # Model name is like "whisper base" -> "base"
+                clean_name = clean_model
+                expected_size = size_map.get(clean_name, 500)
+                
+                # HF Cache format: models--Systran--faster-whisper-{size}
+                # Note: This folder appears AFTER download starts, but os.walk handles missing dir gracefully in dialog
+                target_dir = os.path.expanduser(f"~/.cache/huggingface/hub/models--Systran--faster-whisper-{clean_name}")
+
             # Trigger Download
-            dlg = DownloadDialog(self)
+            dlg = DownloadDialog(self, target_dir=target_dir, expected_size_mb=expected_size)
             dlg.show()
             QApplication.processEvents()
             
@@ -345,11 +460,7 @@ class SettingsWindow(QWidget):
             def run_download():
                 # Download expects clean name?
                 # For whisper: yes. For parakeet: it ignores name effectively as it uses repo from config
-                clean = model
-                if self.combo_backend.currentText() == "faster_whisper":
-                    clean = model.replace("whisper ", "")
-                    
-                self.download_success = self.server.download_model(clean)
+                self.download_success = self.server.download_model(clean_model)
                 
             t = threading.Thread(target=run_download)
             t.start()
@@ -361,29 +472,9 @@ class SettingsWindow(QWidget):
             dlg.close()
             
             if not self.download_success:
-                QMessageBox.critical(self, "Download Failed", "Could not download model.")
+                QMessageBox.critical(self, "Download Failed", "Could not download model. Check internet connection.")
                 return
 
-        settings.set("model_backend", self.combo_backend.currentText())
-        
-        # Strip cosmetic prefix for Whisper if needed, BUT wait...
-        # The backend expects standard names like 'base'.
-        # So we should clean it before saving.
-        clean_model = model
-        if self.combo_backend.currentText() == "faster_whisper":
-            if model.startswith("whisper "):
-                clean_model = model.replace("whisper ", "")
-        
-        settings.set("model_size", clean_model)
-        settings.set("language", self.combo_lang.currentText())
-        settings.set("show_notifications", self.chk_notifications.isChecked())
-        
-        settings.set("enable_logging", self.chk_logging.isChecked())
-        settings.set("log_dir", self.txt_log_dir.text())
-        
-        mode = "paste" if self.radio_paste.isChecked() else "clipboard"
-        settings.set("output_mode", mode)
-        
         self.saved.emit()
         self.close()
 
