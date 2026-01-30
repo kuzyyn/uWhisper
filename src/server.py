@@ -7,7 +7,6 @@ import time
 import subprocess
 import numpy as np
 import sounddevice as sd
-from faster_whisper import WhisperModel
 from config_manager import settings
 from config import SOCKET_PATH
 from signals import ServerSignals
@@ -24,35 +23,46 @@ class WhisperServer:
         # Signals for GUI
         self.signals = ServerSignals()
         
-        # Current loaded model settings
-        self.current_model_size = None
-        self.current_language = None
-        
         # Ensure socket cleanup
         socket_path = SOCKET_PATH
         if os.path.exists(socket_path):
             os.remove(socket_path)
 
     def load_model(self):
-        desired_size = settings.get("model_size")
-        device = settings.get("device")
-        compute_type = settings.get("compute_type")
-
-        # Skip if already loaded with same settings
-        if self.model and self.current_model_size == desired_size:
-            return
-
-        logging.info(f"Loading Whisper model ({desired_size}) on {device}...")
-        self.notify("System", f"Loading model ({desired_size})...")
+        backend = settings.get("model_backend", "faster_whisper")
         
+        # If model is loaded but backend changed, reset
+        if self.model:
+            current_settings = self.model.get_settings()
+            if current_settings.get("type") != backend:
+                logging.info(f"Switching backend from {current_settings.get('type')} to {backend}")
+                self.model = None
+
+        if not self.model:
+            logging.info(f"Initializing backend: {backend}")
+            try:
+                if backend == "faster_whisper":
+                    from asr_whisper import ASRWhisper
+                    self.model = ASRWhisper()
+                elif backend == "parakeet_tdt":
+                    from asr_parakeet import ASRParakeet
+                    self.model = ASRParakeet()
+                else:
+                    logging.error(f"Unknown backend: {backend}")
+                    self.notify("Error", f"Unknown backend: {backend}")
+                    return
+            except ImportError as e:
+                logging.error(f"Failed to import backend {backend}: {e}")
+                self.notify("Error", f"Missing dependencies for {backend}")
+                return
+
+        # Load the actual model resources (this might check for settings changes internally)
         try:
-            self.model = WhisperModel(desired_size, device=device, compute_type=compute_type)
-            self.current_model_size = desired_size
-            logging.info("Model loaded successfully.")
-            self.notify("System", "Model loaded. Ready.")
+            self.model.load()
+            self.notify("System", "Model Ready")
         except Exception as e:
             logging.error(f"Error loading model: {e}")
-            self.notify("Error", f"Failed to load model: {e}")
+            self.notify("Error", f"Model load failed: {e}")
 
     def notify(self, title, message):
         if settings.get("show_notifications", True):
@@ -85,6 +95,7 @@ class WhisperServer:
 
     def get_downloaded_models(self):
         """Check standard HF cache for faster-whisper models"""
+        # TODO: Abstract this for other backends if needed
         try:
             cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
             if not os.path.exists(cache_dir):
@@ -104,16 +115,27 @@ class WhisperServer:
 
     def delete_model(self, model_size):
         """Delete a model from cache"""
+        backend = settings.get("model_backend", "faster_whisper")
         try:
             import shutil
-            cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
-            folder_name = f"models--Systran--faster-whisper-{model_size}"
-            full_path = os.path.join(cache_dir, folder_name)
             
-            if os.path.exists(full_path):
-                shutil.rmtree(full_path)
-                logging.info(f"Deleted model: {model_size}")
-                return True
+            if backend == "faster_whisper":
+                cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+                folder_name = f"models--Systran--faster-whisper-{model_size}"
+                full_path = os.path.join(cache_dir, folder_name)
+                
+                if os.path.exists(full_path):
+                    shutil.rmtree(full_path)
+                    logging.info(f"Deleted model: {model_size}")
+                    return True
+            elif backend == "parakeet_tdt":
+                # Shared folder for the configured repo
+                cache_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model")
+                if os.path.exists(cache_dir):
+                    shutil.rmtree(cache_dir)
+                    logging.info("Deleted Parakeet model cache.")
+                    return True
+                    
             return False
         except Exception as e:
             logging.error(f"Error deleting model: {e}")
@@ -121,12 +143,24 @@ class WhisperServer:
 
     def download_model(self, model_size):
         """Download model in a blocking way (run in thread)"""
+        backend = settings.get("model_backend", "faster_whisper")
+        
         try:
-            logging.info(f"Downloading {model_size}...")
-            # dry_run=False effectively downloads it
-            # We just init the model path download utilizing the library
-            from faster_whisper import download_model
-            download_model(model_size)
+            logging.info(f"Downloading {model_size} for {backend}...")
+            
+            if backend == "faster_whisper":
+                from faster_whisper import download_model
+                download_model(model_size)
+            elif backend == "parakeet_tdt":
+                # For Parakeet, 'load()' triggers the download of the configured repo
+                from asr_parakeet import ASRParakeet
+                # We instantiate and load. This might load into memory which is heavy 
+                # just for a "download" button, but it ensures files are there.
+                # A better way would be exposing only _download_model_if_needed 
+                # but that is private. For now, full load is acceptable as verification.
+                temp_model = ASRParakeet()
+                temp_model.load() 
+                
             logging.info("Download complete.")
             return True
         except Exception as e:
@@ -168,30 +202,22 @@ class WhisperServer:
         audio_np = audio_np.flatten().astype(np.float32)
 
         logging.info("Transcribing...")
-        self.load_model() # Check if model needs reloading
         
+        self.load_model() # Check if model needs loading/reloading
+        
+        if not self.model:
+             logging.error("No model available")
+             self.signals.state_changed.emit("idle")
+             return
+
         try:
-            # Determine language
-            lang = settings.get("language")
-            if lang == "auto":
-                lang = None
-                
-            segments, info = self.model.transcribe(audio_np, beam_size=5, language=lang)
-            
-            text_parts = []
-            for segment in segments:
-                if self.abort_transcription:
-                    logging.warning("Transcription aborted during segment processing.")
-                    break
-                text_parts.append(segment.text)
+            text = self.model.transcribe(audio_np)
             
             if self.abort_transcription:
                 self.abort_transcription = False
                 self.signals.state_changed.emit("idle")
                 return
 
-            text = " ".join(text_parts).strip()
-            
             if text:
                 logging.info(f"Transcription: {text}")
                 self.signals.text_ready.emit(text)

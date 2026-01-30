@@ -22,6 +22,8 @@ DEFAULT_CONFIG = {
     "compute_type": "int8",
     "language": "en",
     "output_mode": "clipboard",  # clipboard, paste, type
+    "model_backend": "faster_whisper", # faster_whisper, parakeet_tdt
+    "parakeet_model_repo": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
     "theme": "dark",
     "show_notifications": True,
     "log_dir": "/tmp/uwhisper_logs",

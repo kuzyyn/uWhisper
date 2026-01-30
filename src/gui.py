@@ -122,11 +122,18 @@ class SettingsWindow(QWidget):
         form_layout = QVBoxLayout(form_frame)
         
         # Model Selection
-        lbl_model = QLabel("Whisper Model:")
+        lbl_backend = QLabel("ASR Backend:")
+        self.combo_backend = QComboBox()
+        self.combo_backend.addItems(["faster_whisper", "parakeet_tdt"])
+        self.combo_backend.currentTextChanged.connect(self.update_model_options)
         
+        form_layout.addWidget(lbl_backend)
+        form_layout.addWidget(self.combo_backend)
+
+        lbl_model = QLabel("Model Size:")
         model_row = QHBoxLayout()
         self.combo_model = QComboBox()
-        self.combo_model.addItems(["tiny", "base", "small", "medium", "large-v3"])
+        # Initial items will be populated by update_model_options
         self.combo_model.currentTextChanged.connect(self.check_model_status)
         model_row.addWidget(self.combo_model)
         
@@ -200,7 +207,16 @@ class SettingsWindow(QWidget):
         self.setLayout(layout)
 
     def load_settings(self):
-        self.combo_model.setCurrentText(settings.get("model_size"))
+        backend = settings.get("model_backend", "faster_whisper")
+        self.combo_backend.setCurrentText(backend)
+        self.update_model_options(backend) # Populate models first
+
+        saved_size = settings.get("model_size")
+        # Handle migration/display name match
+        if backend == "faster_whisper" and saved_size and "whisper" not in saved_size:
+             saved_size = f"whisper {saved_size}"
+        
+        self.combo_model.setCurrentText(saved_size)
         self.combo_lang.setCurrentText(settings.get("language"))
         
         mode = settings.get("output_mode")
@@ -216,6 +232,31 @@ class SettingsWindow(QWidget):
             
         self.check_model_status()
 
+    def update_model_options(self, backend=None):
+        if backend is None:
+            backend = self.combo_backend.currentText()
+            
+        current_model = self.combo_model.currentText()
+        self.combo_model.blockSignals(True)
+        self.combo_model.clear()
+        
+        if backend == "faster_whisper":
+            # Modified display names for Whisper
+            self.combo_model.addItems(["whisper tiny", "whisper base", "whisper small", "whisper medium", "whisper large-v3"])
+            
+            # Try to restore selection or map 'base' -> 'whisper base' if needed
+            if current_model and "whisper" not in current_model and current_model in ["tiny", "base", "small", "medium", "large-v3"]:
+                 self.combo_model.setCurrentText(f"whisper {current_model}")
+            elif current_model:
+                 self.combo_model.setCurrentText(current_model)
+                 
+        elif backend == "parakeet_tdt":
+            self.combo_model.addItems(["parakeet-tdt-0.6b"])
+            self.combo_model.setCurrentIndex(0)
+            
+        self.combo_model.blockSignals(False)
+        self.check_model_status()
+
     # ... check_model_status ...
 
 
@@ -225,14 +266,37 @@ class SettingsWindow(QWidget):
         if path:
             self.txt_log_dir.setText(path)
 
+
     def check_model_status(self, text=None):
         if not self.server:
             return
             
         model = self.combo_model.currentText()
-        installed = self.server.get_downloaded_models()
+        backend = self.combo_backend.currentText()
         
-        if model in installed:
+        installed_list = []
+        is_installed = False
+
+        if backend == "faster_whisper":
+            # Convert "whisper base" -> "base" for checking
+            check_model = model.replace("whisper ", "") if model else ""
+            installed_list = self.server.get_downloaded_models()
+            is_installed = check_model in installed_list
+        elif backend == "parakeet_tdt":
+            # TODO: Add a specific check method to server for parakeet
+             # For now, we assume if the key file exists it is installed.
+             # Ideally server exposes check_is_installed(backend, model)
+             # Let's check crudely via server capability if possible or just rely on user.
+             # Better: Add check_parakeet_installed() to server?
+             # Or just check file existence here if we know the path?
+             # Let's assume server has a generic check method or we check the specific cache dir.
+             # Since GUI runs in same env:
+             import os
+             cache_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model")
+             required_files = ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]
+             is_installed = all(os.path.exists(os.path.join(cache_dir, f)) for f in required_files)
+
+        if is_installed:
             self.lbl_model_status.setText("✓ Installed")
             self.lbl_model_status.setStyleSheet("color: #00ff88; font-size: 10px;")
             self.btn_delete.setEnabled(True)
@@ -247,10 +311,16 @@ class SettingsWindow(QWidget):
 
     def delete_current_model(self):
         if not self.server: return
-        model = self.combo_model.currentText()
+        model_disp = self.combo_model.currentText()
+        backend = self.combo_backend.currentText()
         
+        if backend == "faster_whisper":
+             model = model_disp.replace("whisper ", "")
+        else:
+             model = model_disp
+
         reply = QMessageBox.question(self, "Confirm Delete", 
-                                   f"Are you sure you want to delete model '{model}'?",
+                                   f"Are you sure you want to delete model '{model_disp}'?",
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         
         if reply == QMessageBox.StandardButton.Yes:
@@ -273,7 +343,13 @@ class SettingsWindow(QWidget):
             self.download_success = False
             
             def run_download():
-                self.download_success = self.server.download_model(model)
+                # Download expects clean name?
+                # For whisper: yes. For parakeet: it ignores name effectively as it uses repo from config
+                clean = model
+                if self.combo_backend.currentText() == "faster_whisper":
+                    clean = model.replace("whisper ", "")
+                    
+                self.download_success = self.server.download_model(clean)
                 
             t = threading.Thread(target=run_download)
             t.start()
@@ -288,7 +364,17 @@ class SettingsWindow(QWidget):
                 QMessageBox.critical(self, "Download Failed", "Could not download model.")
                 return
 
-        settings.set("model_size", model)
+        settings.set("model_backend", self.combo_backend.currentText())
+        
+        # Strip cosmetic prefix for Whisper if needed, BUT wait...
+        # The backend expects standard names like 'base'.
+        # So we should clean it before saving.
+        clean_model = model
+        if self.combo_backend.currentText() == "faster_whisper":
+            if model.startswith("whisper "):
+                clean_model = model.replace("whisper ", "")
+        
+        settings.set("model_size", clean_model)
         settings.set("language", self.combo_lang.currentText())
         settings.set("show_notifications", self.chk_notifications.isChecked())
         

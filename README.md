@@ -129,8 +129,6 @@ python3 -m venv venv
    ```
 
 
-
-
 ## Auto-Paste Setup (Optional)
 To enable the application to automatically type/paste text into other applications (without using sudo), you need to configure system permissions one time.
 
