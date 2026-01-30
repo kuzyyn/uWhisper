@@ -23,6 +23,9 @@ class WhisperServer:
         # Signals for GUI
         self.signals = ServerSignals()
         
+        self.headless = False
+
+        
         # Ensure socket cleanup
         socket_path = SOCKET_PATH
         if os.path.exists(socket_path):
@@ -59,17 +62,28 @@ class WhisperServer:
                 self.notify("Error", f"Missing dependencies for {backend}")
                 return
 
+        self.signals.state_changed.emit("loading")
+
+
         # Load the actual model resources (this might check for settings changes internally)
         try:
             self.model.load()
-            self.notify("System", "Model Ready")
+            self.signals.state_changed.emit("transcribing") # Restore state if we were processing
+            # self.notify("System", "Model Ready") # Redundant if workflow is correct
         except Exception as e:
+
             logging.error(f"Error loading model: {e}")
             self.notify("Error", f"Model load failed: {e}")
 
     def notify(self, title, message):
-        if settings.get("show_notifications", True):
-            subprocess.run(['notify-send', "uWhisper", message])
+        # Emit signal for GUI Overlay
+        self.signals.notification.emit(title, message)
+        
+        # If headless, use system notifications (if enabled in settings/headless logic)
+        # We assume headless mode wants notifications always or based on config
+        if self.headless:
+            subprocess.run(['notify-send', "uWhisper", f"{title}: {message}"])
+
 
     def copy_to_clipboard(self, text):
         try:

@@ -214,10 +214,11 @@ class SettingsWindow(QWidget):
         form_layout.addWidget(self.radio_clipboard)
         form_layout.addWidget(self.radio_paste)
 
-        # Notifications
-        self.chk_notifications = QCheckBox("Show System Notifications")
-        self.chk_notifications.setToolTip("Enable standard desktop bubbles (notify-send)")
-        form_layout.addWidget(self.chk_notifications)
+        # Notifications (System notifications removed)
+        # self.chk_notifications = QCheckBox("Show System Notifications")
+        # self.chk_notifications.setToolTip("Enable standard desktop bubbles (notify-send)")
+        # form_layout.addWidget(self.chk_notifications)
+
         
         # Logging
         log_group = QGroupBox("Logging")
@@ -277,7 +278,8 @@ class SettingsWindow(QWidget):
         else:
             self.radio_clipboard.setChecked(True)
             
-        self.chk_notifications.setChecked(settings.get("show_notifications", True))
+        # self.chk_notifications.setChecked(settings.get("show_notifications", True))
+
         
         self.chk_logging.setChecked(settings.get("enable_logging", True))
         self.txt_log_dir.setText(settings.get("log_dir", ""))
@@ -402,7 +404,8 @@ class SettingsWindow(QWidget):
         
         model = self.combo_model.currentText()
         settings.set("language", self.combo_lang.currentText())
-        settings.set("show_notifications", self.chk_notifications.isChecked())
+        # settings.set("show_notifications", self.chk_notifications.isChecked())
+
         settings.set("enable_logging", self.chk_logging.isChecked())
         settings.set("log_dir", self.txt_log_dir.text())
         
@@ -555,20 +558,30 @@ class SystemTrayApp:
         self.overlay.cancelled.connect(self.on_cancel_requested)
         
         # Connect Signals if server exists
-        if self.server and hasattr(self.server, 'signals'):
-            self.server.signals.state_changed.connect(self.on_state_changed)
-            self.server.signals.amplitude_changed.connect(self.on_amplitude_changed)
-            self.server.signals.text_ready.connect(self.on_text_ready)
+        self.server.signals.state_changed.connect(self.on_state_changed)
+        self.server.signals.amplitude_changed.connect(self.on_amplitude_changed)
+        self.server.signals.text_ready.connect(self.on_text_ready)
+        self.server.signals.notification.connect(self.on_notification)
+
 
     def on_cancel_requested(self):
         if self.server:
             self.server.cancel_recording()
         self.overlay.hide()
 
+    def on_notification(self, title, message):
+        self.overlay.show()
+        self.overlay.set_state(title, message)
+        # Hide after delay for notifications
+        QTimer.singleShot(3000, self.overlay.hide)
+
     def on_state_changed(self, state):
         if state == "recording":
             self.overlay.show()
             self.overlay.set_state("Recording", "Listening...")
+        elif state == "loading":
+            self.overlay.show()
+            self.overlay.set_state("Loading", "Loading Model...")
         elif state == "transcribing":
             self.overlay.show()
             self.overlay.set_state("Transcribing", "Processing...")
@@ -582,9 +595,11 @@ class SystemTrayApp:
         self.overlay.update_amplitude(level)
 
     def on_text_ready(self, text):
+
         self.overlay.set_state("Done", f"Success")
         # Hide quickly so we can paste
         QTimer.singleShot(800, self.overlay.hide)
+
     
     def show_settings(self):
         if not self.settings_window:

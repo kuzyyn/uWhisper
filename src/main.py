@@ -93,6 +93,7 @@ def main():
         logging.info("Run without --server (or with --gui) to see the System Tray Icon and Settings.")
         import server
         s = server.WhisperServer()
+        s.headless = True
         s.start()
         return
 
