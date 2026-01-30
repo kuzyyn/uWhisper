@@ -139,3 +139,14 @@ To enable the application to automatically type/paste text into other applicatio
 2.  **Log out and Log back in** (or Reboot) your computer.
 3.  In the uWhisper Settings, verify that **Output Mode** is set to **Clipboard + Auto-Paste**.
 
+## Legal & License
+
+### License
+This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
+This is required because the application utilizes **PyQt6**, which is licensed under GPLv3.
+See the `LICENSE` file for details.
+
+### Attributions
+*   **NVIDIA Parakeet TDT**: This project uses the Parakeet TDT model courtesy of **NVIDIA**, licensed under **CC-BY 4.0**.
+*   **Faster Whisper**: Uses `faster-whisper` (MIT).
+*   **PyQt6**: Uses PyQt6 (GPLv3).
