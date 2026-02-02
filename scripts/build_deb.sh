@@ -1,5 +1,5 @@
 # Configuration
-VERSION="1.0.0"
+VERSION="1.1.0"
 ARCH="amd64"
 PACKAGE_NAME="uwhisper"
 
