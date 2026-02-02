@@ -484,6 +484,7 @@ class SettingsWindow(QWidget):
         self.close()
 
 import signal
+from PyQt6.QtGui import QActionGroup
 from overlay import OverlayWindow
 
 class SystemTrayApp:
@@ -494,12 +495,17 @@ class SystemTrayApp:
         # Server reference for signals
         self.server = server_instance
         
+        # Windows
+        self.callbacks = {
+            "start": start_server_callback,
+            "stop": stop_server_callback
+        }
+
         # Handle Signals (Ctrl+C, etc.)
         signal.signal(signal.SIGINT, self.handle_exit_signal)
         signal.signal(signal.SIGTERM, self.handle_exit_signal)
 
-        # Python/Qt signal workaround:
-        # Let the interpreter run every 500ms so it can catch KeyboardInterrupt
+        # Python/Qt signal workaround
         self.keep_alive_timer = QTimer()
         self.keep_alive_timer.timeout.connect(lambda: None)
         self.keep_alive_timer.start(500)
@@ -512,7 +518,7 @@ class SystemTrayApp:
         if icon.isNull():
             icon = QIcon.fromTheme("microphone")
         if icon.isNull():
-             # Fallback: Create a simple red pixmap
+            # Fallback
             from PyQt6.QtGui import QPixmap, QPainter
             pixmap = QPixmap(16, 16)
             pixmap.fill(Qt.GlobalColor.transparent)
@@ -525,59 +531,205 @@ class SystemTrayApp:
         self.tray_icon.setIcon(icon)
         self.tray_icon.setVisible(True)
         self.tray_icon.setToolTip("uWhisper")
-
-        # Menu
-        self.menu = QMenu()
         
-        self.status_action = QAction("Status: Running")
-        self.status_action.setEnabled(False)
-        self.menu.addAction(self.status_action)
-        self.menu.addSeparator()
-        
-        self.settings_action = QAction("Settings")
-        self.settings_action.triggered.connect(self.show_settings)
-        self.menu.addAction(self.settings_action)
-        
-        self.quit_action = QAction("Quit")
-        self.quit_action.triggered.connect(self.quit)
-        self.menu.addAction(self.quit_action)
-        
-        self.tray_icon.setContextMenu(self.menu)
-
-        # Windows
-        self.callbacks = {
-            "start": start_server_callback,
-            "stop": stop_server_callback
-        }
+        # Setup Extended Menu
+        self.create_tray_menu()
 
         # Show Settings Window immediately on startup
         self.settings_window = SettingsWindow(server=self.server)
         self.settings_window.saved.connect(self.on_settings_saved)
-        self.show_settings()
-        
+
         # Create Overlay Window
         self.overlay = OverlayWindow()
         self.overlay.cancelled.connect(self.on_cancel_requested)
         
         # Connect Signals if server exists
-        self.server.signals.state_changed.connect(self.on_state_changed)
-        self.server.signals.amplitude_changed.connect(self.on_amplitude_changed)
-        self.server.signals.text_ready.connect(self.on_text_ready)
-        self.server.signals.notification.connect(self.on_notification)
+        if self.server:
+            self.server.signals.state_changed.connect(self.on_state_changed)
+            self.server.signals.amplitude_changed.connect(self.on_amplitude_changed)
+            self.server.signals.text_ready.connect(self.on_text_ready)
+            self.server.signals.notification.connect(self.on_notification)
 
+    def create_tray_menu(self):
+        self.menu = QMenu()
+        
+        # 1. Start/Stop Action
+        self.act_toggle = QAction("Start Recording", self.menu)
+        self.act_toggle.triggered.connect(self.toggle_recording_action)
+        self.menu.addAction(self.act_toggle)
+        
+        self.menu.addSeparator()
+        
+        # 2. Model Submenu
+        self.menu_model = QMenu("Model", self.menu)
+        self.group_model = QActionGroup(self.menu)
+        
+        # Map Label -> (backend, parakeet_variant, model_size)
+        self.model_data = {
+            "Parakeet (Fast English)": ("parakeet_tdt", "v2_en", None),
+            "Parakeet (Multilingual)": ("parakeet_tdt", "v3_multi", None),
+            "Whisper (Base)": ("faster_whisper", None, "base"),
+            "Whisper (Small)": ("faster_whisper", None, "small"),
+            "Whisper (Medium)": ("faster_whisper", None, "medium"),
+            "Whisper (Large)": ("faster_whisper", None, "large-v3"),
+        }
+        
+        # Reverse map for syncing
+        self.model_config_map = {} # Keyed by config tuple to Label
+        
+        for label, data in self.model_data.items():
+            act = QAction(label, self.menu_model, checkable=True)
+            act.setData(data)
+            self.group_model.addAction(act)
+            self.menu_model.addAction(act)
+            
+            # Store map: (backend, variant, size) -> Action
+            # Note: variant/size might be None, handled in sync logic
+            self.model_config_map[data] = act
+        
+        self.group_model.triggered.connect(self.on_menu_model_changed)
+        self.menu.addAction(self.menu_model.menuAction())
+        
+        # 3. Language Submenu
+        self.menu_lang = QMenu("Language", self.menu)
+        self.group_lang = QActionGroup(self.menu)
+        self.lang_actions = {}
+        
+        langs = ["auto", "en", "pl", "de", "fr", "es", "it", "ja", "zh", "ru"]
+        for lang in langs:
+            act = QAction(lang, self.menu_lang, checkable=True)
+            act.setData(lang)
+            self.group_lang.addAction(act)
+            self.menu_lang.addAction(act)
+            self.lang_actions[lang] = act
+            
+        self.group_lang.triggered.connect(self.on_menu_lang_changed)
+        self.menu.addAction(self.menu_lang.menuAction())
+        
+        self.menu.addSeparator()
+        
+        # 4. Standard Items
+        self.act_settings = QAction("Settings", self.menu)
+        self.act_settings.triggered.connect(self.show_settings)
+        self.menu.addAction(self.act_settings)
+        
+        self.act_quit = QAction("Quit", self.menu)
+        self.act_quit.triggered.connect(self.quit)
+        self.menu.addAction(self.act_quit)
+        
+        self.tray_icon.setContextMenu(self.menu)
+        
+        # Initialize Selection
+        self.sync_menu_from_settings()
+
+    def sync_menu_from_settings(self):
+        # 1. Sync Model
+        backend = settings.get("model_backend", "faster_whisper")
+        variant = settings.get("parakeet_variant", "v2_en")
+        size = settings.get("model_size", "base")
+        if size == "large-v3": size = "large-v3"
+        elif "base" in size or size == "base": size = "base" 
+        else: size = "base" # default fallback
+        
+        # Match against our known presets
+        target_action = None
+        
+        if backend == "parakeet_tdt":
+            # Match by variant
+            for label, data in self.model_data.items():
+                if data[0] == "parakeet_tdt" and data[1] == variant:
+                    target_action = self.model_config_map.get(data)
+                    break
+        else:
+            # Match by size
+            for label, data in self.model_data.items():
+                if data[0] == "faster_whisper" and data[2] == size:
+                    target_action = self.model_config_map.get(data)
+                    break
+        
+        if target_action:
+            target_action.setChecked(True)
+            
+        # 2. Sync Language
+        lang = settings.get("language", "auto")
+        if lang in self.lang_actions:
+            self.lang_actions[lang].setChecked(True)
+            
+        # 3. Apply Constraints (Parakeet lock)
+        self.apply_constraints()
+
+    def apply_constraints(self):
+        # Logic: If Parakeet is checked, disable Language menu (force auto)
+        backend = settings.get("model_backend")
+        if backend == "parakeet_tdt":
+            self.menu_lang.setEnabled(False)
+            self.menu_lang.setTitle("Language (Auto)")
+            # Force visual check on 'auto'
+            if "auto" in self.lang_actions:
+                self.lang_actions["auto"].setChecked(True)
+        else:
+            self.menu_lang.setEnabled(True)
+            self.menu_lang.setTitle("Language")
+
+    def on_menu_model_changed(self, action):
+        data = action.data()
+        backend, variant, size = data
+        
+        print(f"Menu Model Changed: {backend}, var={variant}, size={size}")
+        
+        settings.set("model_backend", backend)
+        if variant:
+            settings.set("parakeet_variant", variant)
+        if size:
+            settings.set("model_size", size)
+            
+        self.apply_constraints()
+        
+        # Update Settings Window if open
+        if self.settings_window and self.settings_window.isVisible():
+            self.settings_window.load_settings()
+
+    def on_menu_lang_changed(self, action):
+        lang = action.data()
+        print(f"Menu Lang Changed: {lang}")
+        settings.set("language", lang)
+        
+        if self.settings_window and self.settings_window.isVisible():
+            self.settings_window.load_settings()
+
+    def toggle_recording_action(self):
+        if self.server:
+            # Check current state from server logic?
+            # We don't direct access 'server.recording' property easily unless we assume implementation.
+            # But we can just use the toggle via client sim or method
+            # If act_toggle says "Stop", we stop.
+            
+            if "Stop" in self.act_toggle.text():
+                 self.server.stop_recording()
+            else:
+                 self.server.start_recording()
 
     def on_cancel_requested(self):
         if self.server:
             self.server.cancel_recording()
         self.overlay.hide()
-
+        
     def on_notification(self, title, message):
         self.overlay.show()
         self.overlay.set_state(title, message)
-        # Hide after delay for notifications
         QTimer.singleShot(3000, self.overlay.hide)
 
     def on_state_changed(self, state):
+        is_rec = (state == "recording")
+        
+        # Update Menu Action
+        if is_rec:
+            self.act_toggle.setText("Stop Recording")
+            self.act_toggle.setIcon(QIcon.fromTheme("media-playback-stop"))
+        else:
+            self.act_toggle.setText("Start Recording")
+            self.act_toggle.setIcon(QIcon.fromTheme("media-record"))
+            
         if state == "recording":
             self.overlay.set_focusable(True) # Ensure we can catch ESC
             self.overlay.show()
@@ -590,39 +742,26 @@ class SystemTrayApp:
             self.overlay.show()
             self.overlay.set_state("Transcribing", "Processing...")
         elif state == "idle":
-            # Just wait a bit then hide? Or hide immediately?
-            # Usually 'text_ready' handles the success state
             QTimer.singleShot(2000, self.overlay.hide)
 
     def on_amplitude_changed(self, level):
-        # print(f"GUI Amp: {level}") 
         self.overlay.update_amplitude(level)
 
     def on_text_ready(self, text):
         self.overlay.set_state("Done", f"Success")
-        
-        # Release focus immediately so we can paste into the target window
         self.overlay.set_focusable(False) 
         QApplication.processEvents()
         
-        # Robustness: Wait for window to actually lose focus (Max 1s)
-        # This avoids race conditions where the OS hasn't switched focus yet
         start = time.time()
         while self.overlay.isActiveWindow() and (time.time() - start < 1.0):
              QApplication.processEvents()
-             time.sleep(0.01) # Small yielding sleep to prevent 100% CPU in the loop
+             time.sleep(0.01)
 
-        # Check if we should paste
         mode = settings.get("output_mode")
         if mode == "paste":
-            # Attempt paste immediately
             simulate_ctrl_v()
 
-
-        # Hide quickly but visible enough to see "Success"
-        # Since we are non-focusable and transparent-for-mouse (mostly), it shouldn't block interaction much
         QTimer.singleShot(800, self.overlay.hide)
-
 
     
     def show_settings(self):
@@ -635,6 +774,7 @@ class SystemTrayApp:
 
     def on_settings_saved(self):
         print("Settings saved.")
+        self.sync_menu_from_settings()
 
     def handle_exit_signal(self, signum, frame):
         print(f"Received signal {signum}. Quitting...")
@@ -648,7 +788,7 @@ class SystemTrayApp:
             self.callbacks["stop"]()
         self.tray_icon.hide()
         self.app.quit()
-
+        
 if __name__ == "__main__":
     # Test run
     app = SystemTrayApp(None, None)

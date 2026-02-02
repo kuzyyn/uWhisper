@@ -263,6 +263,23 @@ class WhisperServer:
             
         self.signals.state_changed.emit("idle")
 
+    def start_recording(self):
+        if not self.recording:
+            logging.info("Starting recording...")
+            self.abort_transcription = False
+            with self.audio_queue.mutex:
+                self.audio_queue.queue.clear()
+            self.recording = True
+            self.signals.state_changed.emit("recording")
+
+    def stop_recording(self):
+        if self.recording:
+            logging.info("Stopping recording...")
+            self.recording = False
+            # self.notify("uWhisper", "Processing...")
+            # Overlay handles "Processing" state
+            threading.Thread(target=self.process_audio).start()
+
     def handle_client(self, conn):
         try:
             data = conn.recv(1024).decode().strip()
@@ -276,20 +293,9 @@ class WhisperServer:
                 self.last_toggle_time = current_time
 
                 if self.recording:
-                    logging.info("Stopping recording...")
-                    self.recording = False
-                    # self.notify("uWhisper", "Processing...")
-                    # Overlay handles "Processing" state
-                    threading.Thread(target=self.process_audio).start()
+                    self.stop_recording()
                 else:
-                    logging.info("Starting recording...")
-                    self.abort_transcription = False
-                    with self.audio_queue.mutex:
-                        self.audio_queue.queue.clear()
-                    self.recording = True
-                    self.signals.state_changed.emit("recording")
-                    # self.notify("uWhisper", "Recording started...")
-                    # Overlay handles "Recording" state
+                    self.start_recording()
         except Exception as e:
             logging.error(f"Socket error: {e}")
         finally:
