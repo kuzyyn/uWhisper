@@ -11,13 +11,12 @@
 ### 1. Information Display
 - [ ] during the "Processing" / "Transcribing" phase, display the active Model Name (e.g., "Parakeet", "Whisper Large").
 - [ ] For Whisper models, also display the selected Language (e.g., "English", "Auto", "Japanese").
-- [ ] Do NOT show this information during the "Listening" phase to keep the recording view minimal (or consider showing it discreetly).
+- [ ] Do NOT show this information during the "Listening" phase to keep the recording view minimal
 
 ### 2. UX / UI Design
 - [ ] **Recommendation**: Use a **secondary subtitle line** below the main status text to avoid clutter.
     - **Main Text**: "Processing..." (Large, Bold)
     - **Sub Text**: "Whisper Large • Japanese" (Smaller, Lighter color/opacity)
-- [ ] **Alternative (MVP)**: Append to status text as requested: "Processing (Whisper Large - Auto)..."
 
 ### 3. Implementation
 - [ ] Pass the current model execution context (backend, model size, language) to the `OverlayWindow` when state changes to `transcribing`.
@@ -25,11 +24,6 @@
 - [ ] visual polish: Ensure the text fits within the overlay window and contrasts well with the background.
 
 ## UX Analysis
-
-**Option A: Inline (User Suggestion)**
-- *Format*: "Processing (Parakeet - Fast English)..."
-- *Pros*: Minimal code change (just string concatenation).
-- *Cons*: Can become lengthy and hard to scan. Might force window resizing or cause wrapping.
 
 **Option B: Secondary Line (Recommended)**
 - *Format*:

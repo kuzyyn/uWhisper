@@ -4,12 +4,13 @@
     "compute_type": "int8",
     "language": "auto",
     "output_mode": "paste",
-    "model_backend": "faster_whisper",
+    "model_backend": "parakeet_tdt",
     "parakeet_model_repo": "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
     "theme": "dark",
     "show_notifications": false,
     "log_dir": "/tmp/uwhisper_logs",
     "enable_logging": true,
-    "parakeet_variant": "v3_multi",
-    "input_device_name": "Default"
+    "parakeet_variant": "v2_en",
+    "input_device_name": "Default",
+    "tray_icon_color": "White"
 }

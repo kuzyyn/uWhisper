@@ -295,6 +295,20 @@ class SettingsWindow(QWidget):
         form_layout.addWidget(self.radio_clipboard)
         form_layout.addWidget(self.radio_paste)
 
+        # Appearance
+        lbl_appearance = QLabel("Appearance:")
+        form_layout.addWidget(lbl_appearance)
+        
+        tray_layout = QHBoxLayout()
+        lbl_tray = QLabel("Tray Icon Color:")
+        self.combo_tray_theme = QComboBox()
+        self.combo_tray_theme.addItems(["White", "Black"])
+        tray_layout.addWidget(lbl_tray)
+        tray_layout.addWidget(self.combo_tray_theme)
+        tray_layout.addStretch()
+        
+        form_layout.addLayout(tray_layout)
+
         # Logging
         log_group = QGroupBox("Logging")
         log_layout = QVBoxLayout()
@@ -403,6 +417,11 @@ class SettingsWindow(QWidget):
                 self.combo_lang.blockSignals(False)
             except RuntimeError:
                 pass
+            
+                
+            # Tray Color
+            if hasattr(self, 'combo_tray_theme'):
+                 self.combo_tray_theme.setCurrentText(settings.get("tray_icon_color", "White"))
             
             # Microphone settings ignored (using OS default)
             
@@ -528,6 +547,9 @@ class SettingsWindow(QWidget):
         
         mode = "paste" if self.radio_paste.isChecked() else "clipboard"
         settings.set("output_mode", mode)
+        
+        if hasattr(self, 'combo_tray_theme'):
+             settings.set("tray_icon_color", self.combo_tray_theme.currentText())
 
         if self.btn_save.text().startswith("Download"):
             import os
@@ -606,25 +628,11 @@ class SystemTrayApp:
         self.keep_alive_timer.timeout.connect(lambda: None)
         self.keep_alive_timer.start(500)
         
-        # Create Dummy Icon
-        self.tray_icon = QSystemTrayIcon()
+        # Load Icons
+        self.load_icons()
         
-        # Try multiple common icon names or fallback to a color
-        icon = QIcon.fromTheme("audio-input-microphone")
-        if icon.isNull():
-            icon = QIcon.fromTheme("microphone")
-        if icon.isNull():
-            # Fallback
-            from PyQt6.QtGui import QPixmap, QPainter
-            pixmap = QPixmap(16, 16)
-            pixmap.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(pixmap)
-            painter.setBrush(QColor("red"))
-            painter.drawEllipse(0, 0, 16, 16)
-            painter.end()
-            icon = QIcon(pixmap)
-            
-        self.tray_icon.setIcon(icon)
+        self.tray_icon.setVisible(True)
+        self.tray_icon.setToolTip("uWhisper")
         self.tray_icon.setVisible(True)
         self.tray_icon.setToolTip("uWhisper")
         
@@ -645,6 +653,82 @@ class SystemTrayApp:
             self.server.signals.amplitude_changed.connect(self.on_amplitude_changed)
             self.server.signals.text_ready.connect(self.on_text_ready)
             self.server.signals.notification.connect(self.on_notification)
+
+    def load_icons(self):
+        import os
+        from PyQt6.QtGui import QPixmap, QPainter, QColor
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.icon_main_path = os.path.join(base_dir, "icons", "main-icon.svg")
+        self.icon_tray_path = os.path.join(base_dir, "icons", "tray-icon.png")
+        
+        # Application Icon
+        if os.path.exists(self.icon_main_path):
+            self.app_icon = QIcon(self.icon_main_path)
+            self.app.setWindowIcon(self.app_icon)
+            
+        # Tray Icon Logic
+        if not hasattr(self, 'tray_icon'):
+            self.tray_icon = QSystemTrayIcon()
+            
+        # Determine Color Preference
+        color_setting = settings.get("tray_icon_color", "White")
+        target_color = "white" if color_setting == "White" else "black"
+        
+        # Load Base Idle Icon
+        if os.path.exists(self.icon_tray_path):
+             # Recolor
+             self.icon_idle = self.colorize_icon(self.icon_tray_path, target_color)
+        else:
+             self.icon_idle = QIcon.fromTheme("audio-input-microphone")
+             if self.icon_idle.isNull():
+                 self.icon_idle = QIcon.fromTheme("microphone")
+
+        # Generate Recording Icon on top of base idle icon
+        pix = self.icon_idle.pixmap(32, 32)
+        if pix.isNull():
+             pix = QPixmap(32, 32)
+             pix.fill(Qt.GlobalColor.transparent)
+             painter = QPainter(pix)
+             painter.setBrush(QColor(target_color))
+             painter.drawEllipse(2, 2, 28, 28)
+             painter.end()
+             
+        pix_rec = pix.copy()
+        painter = QPainter(pix_rec)
+        painter.setBrush(QColor("red"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        # Red dot
+        painter.drawEllipse(20, 20, 10, 10)
+        painter.end()
+        
+        self.icon_recording = QIcon(pix_rec)
+        
+        # Determine current state to set correct icon
+        # Usually idle on load, but might be reloaded during recording?
+        # Safe to default to idle, state change update will fix it if recording.
+        self.tray_icon.setIcon(self.icon_idle)
+        
+    def colorize_icon(self, icon_path, color_name):
+        from PyQt6.QtGui import QPixmap, QPainter, QColor
+        pixmap = QPixmap(icon_path)
+        if pixmap.isNull(): return QIcon()
+        
+        # Create new pixmap of same size, transparent
+        colored = QPixmap(pixmap.size())
+        colored.fill(Qt.GlobalColor.transparent)
+        
+        painter = QPainter(colored)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw the original icon (black/alpha)
+        painter.drawPixmap(0, 0, pixmap)
+        
+        # Use SourceIn to keep alpha but replace color
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(colored.rect(), QColor(color_name))
+        
+        painter.end()
+        return QIcon(colored)
 
     def create_tray_menu(self):
         self.menu = QMenu()
@@ -817,33 +901,25 @@ class SystemTrayApp:
     def on_state_changed(self, state):
         is_rec = (state == "recording") or (state == "recording_test")
         
-        # Update Tray Menu Text
+        # Update Tray Menu Text & Icon
         if is_rec:
             self.act_toggle.setText("Stop Recording")
             try:
                 self.act_toggle.setIcon(QIcon.fromTheme("media-playback-stop"))
             except: pass
+            
+            # Switch Tray Icon to Recording
+            if hasattr(self, 'icon_recording'):
+                 self.tray_icon.setIcon(self.icon_recording)
         else:
             self.act_toggle.setText("Start Recording")
             try:
                 self.act_toggle.setIcon(QIcon.fromTheme("media-record"))
             except: pass
             
-        # Handle Overlay State
-    def on_state_changed(self, state):
-        is_rec = (state == "recording") or (state == "recording_test")
-        
-        # Update Tray Menu Text
-        if is_rec:
-            self.act_toggle.setText("Stop Recording")
-            try:
-                self.act_toggle.setIcon(QIcon.fromTheme("media-playback-stop"))
-            except: pass
-        else:
-            self.act_toggle.setText("Start Recording")
-            try:
-                self.act_toggle.setIcon(QIcon.fromTheme("media-record"))
-            except: pass
+            # Switch Tray Icon to Idle
+            if hasattr(self, 'icon_idle'):
+                 self.tray_icon.setIcon(self.icon_idle)
             
         # Handle Overlay State
         if state == "recording":
@@ -920,6 +996,7 @@ class SystemTrayApp:
     def on_settings_saved(self):
         print("Settings saved.")
         self.sync_menu_from_settings()
+        self.load_icons()
 
     def handle_exit_signal(self, signum, frame):
         print(f"Received signal {signum}. Quitting...")
