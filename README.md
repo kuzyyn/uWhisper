@@ -13,10 +13,10 @@ uWhisper is a local Voice-to-Text application for Ubuntu, designed to work aroun
 Before installing, ensure you have the necessary system utilities:
 ```bash
 sudo apt-get update
-sudo apt-get install -y libportaudio2 wl-copy libnotify-bin
+sudo apt-get install -y libportaudio2 wl-clipboard libnotify-bin
 ```
 * `libportaudio2`: Required for microphone access.
-* `wl-copy`: Required for clipboard operations on Wayland.
+* `wl-clipboard`: Required for clipboard operations on Wayland.
 * `libnotify-bin`: Required for showing notifications.
 
 ## Installation
@@ -29,7 +29,7 @@ The easiest way to install uWhisper is to download the latest release.
 2.  **Install**:
     Run the following command to install the application, dependencies, and set up the shortcut automatically:
     ```bash
-    sudo dpkg -i uwhisper_1.0.0_amd64.deb
+    sudo dpkg -i uwhisper_*_amd64.deb
     sudo apt --fix-broken install  # Run this if there are any dependency errors
     ```
 

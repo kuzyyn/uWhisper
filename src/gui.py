@@ -78,6 +78,18 @@ STYLESHEET = """
     }
 """
 
+# --- Model Definitions ---
+# Label -> (backend, variant, size)
+MODEL_OPTIONS = {
+    "Parakeet (Fast English)": ("parakeet_tdt", "v2_en", None),
+    "Parakeet (Multilingual)": ("parakeet_tdt", "v3_multi", None),
+    "Whisper (Tiny)": ("faster_whisper", None, "tiny"),
+    "Whisper (Base)": ("faster_whisper", None, "base"),
+    "Whisper (Small)": ("faster_whisper", None, "small"),
+    "Whisper (Medium)": ("faster_whisper", None, "medium"),
+    "Whisper (Large)": ("faster_whisper", None, "large-v3"),
+}
+
 class DownloadDialog(QDialog):
     def __init__(self, parent=None, target_dir=None, expected_size_mb=670):
         super().__init__(parent)
@@ -156,19 +168,11 @@ class SettingsWindow(QWidget):
         form_layout = QVBoxLayout(form_frame)
         
         # Model Selection
-        lbl_backend = QLabel("ASR Backend:")
-        self.combo_backend = QComboBox()
-        self.combo_backend.addItems(["faster_whisper", "parakeet_tdt"])
-        self.combo_backend.currentTextChanged.connect(self.update_model_options)
-        
-        form_layout.addWidget(lbl_backend)
-        form_layout.addWidget(self.combo_backend)
-
-        lbl_model = QLabel("Model Size:")
+        lbl_model = QLabel("Model:")
         model_row = QHBoxLayout()
         self.combo_model = QComboBox()
-        # Initial items will be populated by update_model_options
-        self.combo_model.currentTextChanged.connect(self.check_model_status)
+        self.combo_model.addItems(MODEL_OPTIONS.keys())
+        self.combo_model.currentTextChanged.connect(self.on_model_changed)
         model_row.addWidget(self.combo_model)
         
         self.btn_delete = QPushButton("🗑️")
@@ -180,29 +184,15 @@ class SettingsWindow(QWidget):
         form_layout.addWidget(lbl_model)
         form_layout.addLayout(model_row)
         
-        # Parakeet Variant (Hidden by default)
-        self.lbl_variant = QLabel("Model Variant:")
-        self.combo_variant = QComboBox()
-        self.combo_variant.addItem("English (Fast & Accurate)", "v2_en")
-        self.combo_variant.addItem("Multilingual (25 Languages)", "v3_multi")
-        self.combo_variant.currentTextChanged.connect(self.check_model_status)
-        
-        form_layout.addWidget(self.lbl_variant)
-        form_layout.addWidget(self.combo_variant)
-        
-        # Hide initially (will trigger update in load_settings)
-        self.lbl_variant.hide()
-        self.combo_variant.hide()
-        
         self.lbl_model_status = QLabel("")
         self.lbl_model_status.setStyleSheet("color: #888; font-size: 10px;")
         form_layout.addWidget(self.lbl_model_status)
 
         # Language
-        lbl_lang = QLabel("Language:")
+        self.lbl_lang = QLabel("Language:")
         self.combo_lang = QComboBox()
         self.combo_lang.addItems(["auto", "en", "pl", "de", "fr", "es", "it", "ja", "zh", "ru"])
-        form_layout.addWidget(lbl_lang)
+        form_layout.addWidget(self.lbl_lang)
         form_layout.addWidget(self.combo_lang)
 
         # Output Mode
@@ -216,12 +206,6 @@ class SettingsWindow(QWidget):
         form_layout.addWidget(self.radio_clipboard)
         form_layout.addWidget(self.radio_paste)
 
-        # Notifications (System notifications removed)
-        # self.chk_notifications = QCheckBox("Show System Notifications")
-        # self.chk_notifications.setToolTip("Enable standard desktop bubbles (notify-send)")
-        # form_layout.addWidget(self.chk_notifications)
-
-        
         # Logging
         log_group = QGroupBox("Logging")
         log_layout = QVBoxLayout()
@@ -257,21 +241,24 @@ class SettingsWindow(QWidget):
 
     def load_settings(self):
         backend = settings.get("model_backend", "faster_whisper")
-        self.combo_backend.setCurrentText(backend)
-        self.update_model_options(backend) # Populate models first
-
-        # Restore variant selection
-        saved_variant = settings.get("parakeet_variant", "v2_en")
-        index = self.combo_variant.findData(saved_variant)
-        if index >= 0:
-            self.combo_variant.setCurrentIndex(index)
-
-        saved_size = settings.get("model_size")
-        # Handle migration/display name match
-        if backend == "faster_whisper" and saved_size and "whisper" not in saved_size:
-             saved_size = f"whisper {saved_size}"
+        variant = settings.get("parakeet_variant", "v2_en")
+        size = settings.get("model_size", "base")
+        if size == "large-v3": size = "large-v3"
+        elif size and "base" in size: size = "base"
         
-        self.combo_model.setCurrentText(saved_size)
+        # Find matching label
+        target_label = "Whisper (Base)" # Default
+        for label, (b, v, s) in MODEL_OPTIONS.items():
+            if backend == "parakeet_tdt":
+                 if b == backend and v == variant:
+                     target_label = label
+                     break
+            else:
+                 if b == backend and s == size:
+                     target_label = label
+                     break
+                     
+        self.combo_model.setCurrentText(target_label)
         self.combo_lang.setCurrentText(settings.get("language"))
         
         mode = settings.get("output_mode")
@@ -280,45 +267,24 @@ class SettingsWindow(QWidget):
         else:
             self.radio_clipboard.setChecked(True)
             
-        # self.chk_notifications.setChecked(settings.get("show_notifications", True))
-
-        
         self.chk_logging.setChecked(settings.get("enable_logging", True))
         self.txt_log_dir.setText(settings.get("log_dir", ""))
             
-        self.check_model_status()
+        self.on_model_changed(target_label)
 
-    def update_model_options(self, backend=None):
-        if backend is None:
-            backend = self.combo_backend.currentText()
-            
-        current_model = self.combo_model.currentText()
-        self.combo_model.blockSignals(True)
-        self.combo_model.clear()
+    def on_model_changed(self, text):
+        data = MODEL_OPTIONS.get(text)
+        if not data: return
         
-        if backend == "faster_whisper":
-            # Modified display names for Whisper
-            self.combo_model.addItems(["whisper tiny", "whisper base", "whisper small", "whisper medium", "whisper large-v3"])
+        backend, variant, size = data
+        
+        if backend == "parakeet_tdt":
+            self.lbl_lang.hide()
+            self.combo_lang.hide()
+        else:
+            self.lbl_lang.show()
+            self.combo_lang.show()
             
-            # Try to restore selection or map 'base' -> 'whisper base' if needed
-            if current_model and "whisper" not in current_model and current_model in ["tiny", "base", "small", "medium", "large-v3"]:
-                 self.combo_model.setCurrentText(f"whisper {current_model}")
-            elif current_model:
-                 self.combo_model.setCurrentText(current_model)
-            
-            # Hide variant for whisper
-            self.lbl_variant.hide()
-            self.combo_variant.hide()
-                 
-        elif backend == "parakeet_tdt":
-            self.combo_model.addItems(["parakeet-tdt-0.6b"])
-            self.combo_model.setCurrentIndex(0)
-            
-            # Show variant for parakeet
-            self.lbl_variant.show()
-            self.combo_variant.show()
-            
-        self.combo_model.blockSignals(False)
         self.check_model_status()
 
     # ... check_model_status ...
@@ -335,28 +301,22 @@ class SettingsWindow(QWidget):
         if not self.server:
             return
             
-        model = self.combo_model.currentText()
-        backend = self.combo_backend.currentText()
+        model_label = self.combo_model.currentText()
+        data = MODEL_OPTIONS.get(model_label)
+        if not data: return
         
-        installed_list = []
+        backend, variant, size = data
+        
         is_installed = False
 
         if backend == "faster_whisper":
-            # Convert "whisper base" -> "base" for checking
-            check_model = model.replace("whisper ", "") if model else ""
+            # Check if size is in downloaded models
+            check_model = size # e.g. "base"
             installed_list = self.server.get_downloaded_models()
             is_installed = check_model in installed_list
         elif backend == "parakeet_tdt":
-            # TODO: Add a specific check method to server for parakeet
-             # For now, we assume if the key file exists it is installed.
-             # Ideally server exposes check_is_installed(backend, model)
-             # Let's check crudely via server capability if possible or just rely on user.
-             # Better: Add check_parakeet_installed() to server?
-             # Or just check file existence here if we know the path?
-             # Let's assume server has a generic check method or we check the specific cache dir.
-             # Since GUI runs in same env:
              import os
-             variant = self.combo_variant.currentData() # v2_en or v3_multi
+             # variant is v2_en or v3_multi
              if variant == "v3_multi":
                  cache_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model_v3")
              else:
@@ -380,20 +340,23 @@ class SettingsWindow(QWidget):
 
     def delete_current_model(self):
         if not self.server: return
-        model_disp = self.combo_model.currentText()
-        backend = self.combo_backend.currentText()
+        model_label = self.combo_model.currentText()
+        data = MODEL_OPTIONS.get(model_label)
+        if not data: return
+        
+        backend, variant, size = data
         
         if backend == "faster_whisper":
-             model = model_disp.replace("whisper ", "")
+             model_id = size
         else:
-             model = model_disp
+             model_id = backend # Generic ID for Parakeet in delete? Or handle differently.
 
         reply = QMessageBox.question(self, "Confirm Delete", 
-                                   f"Are you sure you want to delete model '{model_disp}'?",
+                                   f"Are you sure you want to delete model '{model_label}'?",
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         
         if reply == QMessageBox.StandardButton.Yes:
-            success = self.server.delete_model(model)
+            success = self.server.delete_model(model_id) # Ensure server handles this ID
             if success:
                 self.check_model_status()
             else:
@@ -401,44 +364,37 @@ class SettingsWindow(QWidget):
 
     def save_settings(self):
         # Update settings first so download uses correct values
-        settings.set("model_backend", self.combo_backend.currentText())
-        settings.set("parakeet_variant", self.combo_variant.currentData())
+        model_label = self.combo_model.currentText()
+        data = MODEL_OPTIONS.get(model_label)
+        if not data: return
         
-        model = self.combo_model.currentText()
+        backend, variant, size = data
+        
+        settings.set("model_backend", backend)
+        if variant:
+            settings.set("parakeet_variant", variant)
+        if size:
+            settings.set("model_size", size)
+            
         settings.set("language", self.combo_lang.currentText())
-        # settings.set("show_notifications", self.chk_notifications.isChecked())
-
         settings.set("enable_logging", self.chk_logging.isChecked())
         settings.set("log_dir", self.txt_log_dir.text())
         
         mode = "paste" if self.radio_paste.isChecked() else "clipboard"
         settings.set("output_mode", mode)
-        
-        # Clean model name for storage/usage
-        clean_model = model
-        if self.combo_backend.currentText() == "faster_whisper":
-            if model.startswith("whisper "):
-                clean_model = model.replace("whisper ", "")
-        settings.set("model_size", clean_model)
 
         if self.btn_save.text().startswith("Download"):
-            # Determine target for progress bar
             import os
-            import os
-            backend_type = self.combo_backend.currentText()
             
-            if backend_type == "parakeet_tdt":
+            if backend == "parakeet_tdt":
                 target_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model") # Default v2
-                expected_size = 641 # Approx for V2/V3 (Real size on disk is ~641 MiB)
+                expected_size = 641 
                 
-                variant = settings.get("parakeet_variant")
                 if variant == "v3_multi":
                      target_dir = os.path.expanduser("~/.cache/uwhisper/parakeet_model_v3")
                      expected_size = 641
             else:
                 # Faster Whisper
-                # Mapping of approx sizes in MiB
-                # tiny: ~72MB, base: ~140MB, small: ~460MB, medium: ~1.4GB, large-v3: ~2.9GB
                 size_map = {
                     "tiny": 75,
                     "base": 145,
@@ -446,13 +402,8 @@ class SettingsWindow(QWidget):
                     "medium": 1500,
                     "large-v3": 3000
                 }
-                # Model name is like "whisper base" -> "base"
-                clean_name = clean_model
-                expected_size = size_map.get(clean_name, 500)
-                
-                # HF Cache format: models--Systran--faster-whisper-{size}
-                # Note: This folder appears AFTER download starts, but os.walk handles missing dir gracefully in dialog
-                target_dir = os.path.expanduser(f"~/.cache/huggingface/hub/models--Systran--faster-whisper-{clean_name}")
+                expected_size = size_map.get(size, 500)
+                target_dir = os.path.expanduser(f"~/.cache/huggingface/hub/models--Systran--faster-whisper-{size}")
 
             # Trigger Download
             dlg = DownloadDialog(self, target_dir=target_dir, expected_size_mb=expected_size)
@@ -463,9 +414,17 @@ class SettingsWindow(QWidget):
             self.download_success = False
             
             def run_download():
-                # Download expects clean name?
-                # For whisper: yes. For parakeet: it ignores name effectively as it uses repo from config
-                self.download_success = self.server.download_model(clean_model)
+                # Server download_model expects clean name (size for whisper, or just parakeet trigger)
+                # The server likely uses settings to decide for Parakeet, but for Whisper it usually needs the size as arg
+                arg = size if backend == "faster_whisper" else "parakeet-tdt-0.6b" # Legacy arg for parakeet?
+                # Actually, check what server expects. 
+                # In original code: `clean_model` passed was `model` (e.g. "base") or `model` (parakeet..)
+                # logic was: `clean_model = model` -> if whisper, remove "whisper ". 
+                # Here `size` IS "base", "tiny" etc.
+                # For Parakeet, original passed "parakeet-tdt-0.6b" from combo.
+                
+                download_arg = size if size else "parakeet-tdt-0.6b"
+                self.download_success = self.server.download_model(download_arg)
                 
             t = threading.Thread(target=run_download)
             t.start()
@@ -564,27 +523,16 @@ class SystemTrayApp:
         self.menu_model = QMenu("Model", self.menu)
         self.group_model = QActionGroup(self.menu)
         
-        # Map Label -> (backend, parakeet_variant, model_size)
-        self.model_data = {
-            "Parakeet (Fast English)": ("parakeet_tdt", "v2_en", None),
-            "Parakeet (Multilingual)": ("parakeet_tdt", "v3_multi", None),
-            "Whisper (Base)": ("faster_whisper", None, "base"),
-            "Whisper (Small)": ("faster_whisper", None, "small"),
-            "Whisper (Medium)": ("faster_whisper", None, "medium"),
-            "Whisper (Large)": ("faster_whisper", None, "large-v3"),
-        }
-        
         # Reverse map for syncing
         self.model_config_map = {} # Keyed by config tuple to Label
         
-        for label, data in self.model_data.items():
+        for label, data in MODEL_OPTIONS.items():
             act = QAction(label, self.menu_model, checkable=True)
             act.setData(data)
             self.group_model.addAction(act)
             self.menu_model.addAction(act)
             
             # Store map: (backend, variant, size) -> Action
-            # Note: variant/size might be None, handled in sync logic
             self.model_config_map[data] = act
         
         self.group_model.triggered.connect(self.on_menu_model_changed)
@@ -636,13 +584,13 @@ class SystemTrayApp:
         
         if backend == "parakeet_tdt":
             # Match by variant
-            for label, data in self.model_data.items():
+            for label, data in MODEL_OPTIONS.items():
                 if data[0] == "parakeet_tdt" and data[1] == variant:
                     target_action = self.model_config_map.get(data)
                     break
         else:
             # Match by size
-            for label, data in self.model_data.items():
+            for label, data in MODEL_OPTIONS.items():
                 if data[0] == "faster_whisper" and data[2] == size:
                     target_action = self.model_config_map.get(data)
                     break
