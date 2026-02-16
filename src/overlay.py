@@ -9,34 +9,13 @@ class OverlayWindow(QWidget):
 
     def __init__(self):
         super().__init__()
-        # Window Flags: Frameless, On Top, Tool
-        # We remove WindowDoesNotAcceptFocus to allow catching ESC key
-        # Window Flags: Frameless, On Top, Tool
-        # Initial flags
-        self.base_flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
-        self.setWindowFlags(self.base_flags)
-
-    def set_focusable(self, focusable: bool):
-        if not focusable:
-            self.setWindowFlags(self.base_flags | Qt.WindowType.WindowDoesNotAcceptFocus)
-        else:
-            self.setWindowFlags(self.base_flags)
-        # We need to show again to apply flag changes, but we want to avoid flickering if possible
-        # Typically flags change requires hide/show, but let's try just setWindowFlags + show
-        if self.isVisible():
-             self.show()
-
         
-        # Transparent Background & Click-through
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        # Note: If we want to catch keys, we might need to disable TransparentForMouseEvents 
-        # OR just rely on focus. Let's try keeping it for now.
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        # State for flags
+        self._on_top = True
+        self._focusable = True
         
-        # Fullscreen to bypass Wayland positioning restrictions
-        self.screen_geo = QApplication.primaryScreen().geometry()
-        self.setGeometry(self.screen_geo)
+        # Initial Flags calculation
+        self._update_flags()
 
         # State
         self.bars = [0.1] * 20  # 20 bars for visualization
@@ -47,7 +26,63 @@ class OverlayWindow(QWidget):
         # Timer for smooth animation
         self.anim_timer = QTimer()
         self.anim_timer.timeout.connect(self.update_animation)
-        self.anim_timer.start(30) 
+        self.anim_timer.start(30)
+        
+        # Ensure we have screen geometry
+        self.screen_geo = QApplication.primaryScreen().geometry()
+        self.setGeometry(self.screen_geo)
+
+    def _update_flags(self):
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        
+        if self._on_top:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+            
+        if not self._focusable:
+            flags |= Qt.WindowType.WindowDoesNotAcceptFocus
+            
+        self.setWindowFlags(flags)
+        
+        # Re-apply attributes that might reset on flag change
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        
+        # We need to re-apply this specific attribute too because setWindowFlags clears attributes
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not self.check_interactive())
+        
+        if self.isVisible():
+            self.show()
+            
+    def check_interactive(self):
+        # Helper to read current attribute state, though we might not rely on it
+        return not self.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_focusable(self, focusable: bool):
+        if self._focusable == focusable:
+            return
+        self._focusable = focusable
+        self._update_flags()
+        
+    def set_on_top(self, on_top: bool):
+        if self._on_top == on_top:
+            return
+        self._on_top = on_top
+        self._update_flags()
+
+    def set_interactive(self, interactive: bool):
+        # Invert logic: If interactive=True, Transparent=False
+        current = not self.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        if current == interactive:
+            return
+            
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not interactive)
+        
+        # Force update if visible
+        if self.isVisible():
+            # Sometimes hide/show is needed for attribute change to take effect on some WMs
+            self.hide()
+            self.show()
+ 
         
     def showEvent(self, event):
         super().showEvent(event)

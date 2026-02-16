@@ -15,9 +15,11 @@ class WhisperServer:
     def __init__(self):
         self.running = True
         self.recording = False
+        self.mic_testing = False
         self.audio_queue = queue.Queue()
         self.model = None
         self.samplerate = 16000
+        self.current_rate = 16000 # Actual rate of the stream
         self.abort_transcription = False
         
         # Signals for GUI
@@ -30,6 +32,70 @@ class WhisperServer:
         socket_path = SOCKET_PATH
         if os.path.exists(socket_path):
             os.remove(socket_path)
+
+    # ... (existing methods) ...
+
+    def start_mic_test(self):
+        """Start a microphone test (recording without transcription)"""
+        logging.info("Starting Microphone Test...")
+        self.mic_testing = True
+        self.start_recording()
+
+    def finish_mic_test(self):
+        """Process and play back the recorded test audio"""
+        try:
+            self.signals.state_changed.emit("playing") # distinct state? Or reuse idle?
+            # actually "playing" isn't handled in GUI overlay yet, maybe keep "recording" until done?
+            # Or just emit idle after done.
+            
+            audio_data = []
+            while not self.audio_queue.empty():
+                audio_data.append(self.audio_queue.get())
+            
+            if not audio_data:
+                logging.info("No audio data recorded for test.")
+                self.signals.state_changed.emit("idle")
+                self.mic_testing = False
+                return
+
+            audio_np = np.concatenate(audio_data, axis=0)
+            
+            logging.info("Playing back test audio...")
+            sd.play(audio_np, self.samplerate)
+            sd.wait()
+            logging.info("Playback complete.")
+            
+        except Exception as e:
+            logging.error(f"Mic test error: {e}")
+            self.notify("Error", f"Mic test failed: {e}")
+            
+        self.mic_testing = False
+        self.signals.state_changed.emit("idle")
+
+    def start_recording(self):
+        if not self.recording:
+            logging.info("Starting recording...")
+            self.abort_transcription = False
+            with self.audio_queue.mutex:
+                self.audio_queue.queue.clear()
+            self.recording = True
+            
+            if self.mic_testing:
+                self.signals.state_changed.emit("recording_test")
+            else:
+                self.signals.state_changed.emit("recording")
+
+    def stop_recording(self):
+        if self.recording:
+            logging.info("Stopping recording...")
+            self.recording = False
+            
+            # The finish_mic_test method emits 'idle' when done playing back.
+            # We don't need to emit anything here immediately for test mode.
+            if self.mic_testing:
+                 threading.Thread(target=self.finish_mic_test).start()
+            else:
+                 threading.Thread(target=self.process_audio).start()
 
     def load_model(self):
         backend = settings.get("model_backend", "faster_whisper")
@@ -97,9 +163,37 @@ class WhisperServer:
         # if status:
         #     print(f"Audio status: {status}")
         if self.recording:
-            self.audio_queue.put(indata.copy())
+            # Resample if needed
+            if self.current_rate != self.samplerate:
+                # Simple resampling using numpy interpolation if rate mismatch
+                # This is "good enough" for speech recognition, though not audiophile quality
+                
+                # Check for integer downsampling (e.g. 48k -> 16k)
+                if self.current_rate % self.samplerate == 0:
+                    step = int(self.current_rate / self.samplerate)
+                    resampled = indata[::step].copy()
+                else:
+                    # Fractional resampling
+                    # Original time points
+                    x = np.arange(frames)
+                    # New time points
+                    target_frames = int(frames * (self.samplerate / self.current_rate))
+                    x_new = np.linspace(0, frames-1, target_frames)
+                    
+                    # Interp for channel 0 (assuming mono input mostly)
+                    # indata is (frames, channels), usually (N, 1)
+                    if indata.shape[1] > 0:
+                         channel_data = indata[:, 0]
+                         resampled_flat = np.interp(x_new, x, channel_data)
+                         resampled = resampled_flat.reshape(-1, 1).astype(np.float32)
+                    else:
+                         resampled = np.zeros((target_frames, 1), dtype=np.float32)
+
+                self.audio_queue.put(resampled)
+            else:
+                self.audio_queue.put(indata.copy())
             
-            # Calculate Amplitude (RMS) for Visualization
+            # Calculate Amplitude (RMS) for Visualization - use raw input
             rms = np.sqrt(np.mean(indata**2))
             # Normalize reasonably (voice is usually low amplitude)
             # typical values 0.01 - 0.2, boost it for visuals
@@ -184,10 +278,81 @@ class WhisperServer:
             logging.error(f"Download error: {e}")
             return False
 
+    def get_device_index(self):
+        """Always return None to use system default device per user request"""
+        return None
+        
+        # Old logic removed:
+        # device_name = settings.get("input_device_name")
+        # ... logic to find index ...
+
     def record_loop(self):
-        with sd.InputStream(samplerate=self.samplerate, channels=1, callback=self.audio_callback):
-            while self.running:
-                time.sleep(0.1)
+        current_device_index = self.get_device_index()
+        
+        while self.running:
+            stream = None
+            try:
+                # Try preferred rate first (16000)
+                rates_to_try = [16000]
+                
+                # Check device capabilities if possible
+                try:
+                    dev_info = sd.query_devices(current_device_index) if current_device_index is not None else sd.query_devices(kind='input')
+                    def_rate = int(dev_info.get('default_samplerate', 44100))
+                    if def_rate not in rates_to_try:
+                        rates_to_try.append(def_rate)
+                except Exception:
+                    pass
+                
+                # Fallbacks
+                for r in [48000, 44100, 32000, 8000]:
+                    if r not in rates_to_try:
+                        rates_to_try.append(r)
+                
+                logging.info(f"Attempting to open stream. Rates: {rates_to_try}")
+                
+                for rate in rates_to_try:
+                    try:
+                        stream = sd.InputStream(
+                            device=current_device_index, 
+                            samplerate=rate, 
+                            channels=1, 
+                            callback=self.audio_callback
+                        )
+                        stream.start()
+                        self.current_rate = rate
+                        logging.info(f"Stream opened on device {current_device_index if current_device_index is not None else 'Default'} at {rate}Hz")
+                        break
+                    except Exception as e:
+                        logging.warning(f"Failed to open stream at {rate}Hz: {e}")
+                        if stream:
+                            stream.close()
+                        stream = None
+                
+                if not stream:
+                    raise Exception("Could not open audio stream with any common sample rate.")
+
+                # Wait loop
+                while self.running:
+                    time.sleep(1.0)
+                    if not stream.active:
+                        logging.error("Stream inactive!")
+                        break
+                        
+                    # Check for device change
+                    new_device_index = self.get_device_index()
+                    if new_device_index != current_device_index:
+                        logging.info(f"Device changed from {current_device_index} to {new_device_index}. Restarting stream...")
+                        current_device_index = new_device_index
+                        break # Break inner loop to restart stream
+            
+            except Exception as e:
+                logging.error(f"Audio stream error: {e}")
+                time.sleep(3) # Wait before retrying
+            finally:
+                if stream:
+                    stream.stop()
+                    stream.close()
 
     def cancel_recording(self):
         logging.info("Cancellation requested.")
@@ -263,22 +428,8 @@ class WhisperServer:
             
         self.signals.state_changed.emit("idle")
 
-    def start_recording(self):
-        if not self.recording:
-            logging.info("Starting recording...")
-            self.abort_transcription = False
-            with self.audio_queue.mutex:
-                self.audio_queue.queue.clear()
-            self.recording = True
-            self.signals.state_changed.emit("recording")
+    # Old methods removed as they were replaced above
 
-    def stop_recording(self):
-        if self.recording:
-            logging.info("Stopping recording...")
-            self.recording = False
-            # self.notify("uWhisper", "Processing...")
-            # Overlay handles "Processing" state
-            threading.Thread(target=self.process_audio).start()
 
     def handle_client(self, conn):
         try:

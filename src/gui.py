@@ -1,6 +1,7 @@
 import sys
 import time
 import threading
+import sounddevice as sd
 from PyQt6.QtWidgets import (QApplication, QSystemTrayIcon, QMenu, QWidget, QVBoxLayout, 
                             QLabel, QComboBox, QPushButton, QRadioButton, QGroupBox, QHBoxLayout, QFrame,
                             QDialog, QProgressBar, QMessageBox, QCheckBox, QFileDialog, QLineEdit)
@@ -90,6 +91,51 @@ MODEL_OPTIONS = {
     "Whisper (Large)": ("faster_whisper", None, "large-v3"),
 }
 
+def get_input_devices():
+    """List input devices: returns list of names. Filters out raw ALSA hw devices."""
+    devices = []
+    try:
+        devs = sd.query_devices()
+        # Filter for input devices (max_input_channels > 0)
+        
+        # Priority 1: Pulse/Pipewire/Default
+        priority_devs = []
+        # Priority 2: Other useful ones (USB, etc)
+        other_devs = []
+        
+        seen_names = set()
+        
+        for d in devs:
+            if d['max_input_channels'] > 0:
+                name = d['name']
+                
+                # Filter out raw ALSA hardware devices which usually cause sample rate issues
+                # e.g. "sof-hda-dsp: - (hw:0,0)"
+                if "(hw:" in name or "dmix" in name or "surround" in name:
+                    continue
+                    
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                
+                lower_name = name.lower()
+                if "default" in lower_name or "pipewire" in lower_name or "pulse" in lower_name:
+                    priority_devs.append(name)
+                else:
+                    other_devs.append(name)
+        
+        devices.extend(sorted(priority_devs))
+        devices.extend(sorted(other_devs))
+        
+        # Always ensure Default is present if nothing else found or as fallback
+        if "Default" not in devices and "default" not in devices:
+             devices.insert(0, "Default")
+             
+    except Exception as e:
+        print(f"Error querying devices: {e}")
+        devices.append("Default")
+    return devices
+
 class DownloadDialog(QDialog):
     def __init__(self, parent=None, target_dir=None, expected_size_mb=670):
         super().__init__(parent)
@@ -147,7 +193,7 @@ class SettingsWindow(QWidget):
         super().__init__()
         self.server = server
         self.setWindowTitle("uWhisper Settings")
-        self.setMinimumSize(450, 500) # Increased height and made resizable
+        self.setMinimumSize(450, 550) # Increased height
         self.setup_ui()
         self.load_settings()
 
@@ -194,6 +240,49 @@ class SettingsWindow(QWidget):
         self.combo_lang.addItems(["auto", "en", "pl", "de", "fr", "es", "it", "ja", "zh", "ru"])
         form_layout.addWidget(self.lbl_lang)
         form_layout.addWidget(self.combo_lang)
+        
+        # Microphone Note (Replaces Selection)
+        lbl_mic_title = QLabel("Microphone:")
+        lbl_mic_note = QLabel("Select microphone in your OS settings")
+        lbl_mic_note.setStyleSheet("color: #888; font-style: italic;")
+        
+        form_layout.addWidget(lbl_mic_title)
+        form_layout.addWidget(lbl_mic_note)
+        
+        # Mic Test Area
+        test_layout = QHBoxLayout()
+        test_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.btn_test_mic = QPushButton("Test Microphone")
+        self.btn_test_mic.setCheckable(True)
+        self.btn_test_mic.clicked.connect(self.on_test_mic_clicked)
+        self.btn_test_mic.setStyleSheet("background-color: #555; color: white;") # Neutral default
+        
+        test_layout.addWidget(self.btn_test_mic)
+        
+        # Embedded Amplitude Visualizer
+        self.progress_mic_level = QProgressBar()
+        self.progress_mic_level.setRange(0, 100)
+        self.progress_mic_level.setTextVisible(False)
+        self.progress_mic_level.setFixedHeight(10)
+        self.progress_mic_level.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #444;
+                border-radius: 2px;
+                background-color: #222;
+            }
+            QProgressBar::chunk {
+                background-color: #00ff88;
+                width: 1px;
+            }
+        """)
+        test_layout.addWidget(self.progress_mic_level)
+        
+        lbl_test_hint = QLabel("Records and plays back audio to verify input.")
+        lbl_test_hint.setStyleSheet("color: #888; font-size: 11px; font-style: italic;")
+        
+        form_layout.addLayout(test_layout)
+        form_layout.addWidget(lbl_test_hint)
 
         # Output Mode
         lbl_mode = QLabel("Output Mode:")
@@ -236,41 +325,101 @@ class SettingsWindow(QWidget):
         self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_save.clicked.connect(self.save_settings)
         layout.addWidget(self.btn_save)
+        
+        # Connect server signal if available to update button state
+        if self.server:
+            self.server.signals.state_changed.connect(self.on_server_state_changed)
 
         self.setLayout(layout)
 
-    def load_settings(self):
-        backend = settings.get("model_backend", "faster_whisper")
-        variant = settings.get("parakeet_variant", "v2_en")
-        size = settings.get("model_size", "base")
-        if size == "large-v3": size = "large-v3"
-        elif size and "base" in size: size = "base"
-        
-        # Find matching label
-        target_label = "Whisper (Base)" # Default
-        for label, (b, v, s) in MODEL_OPTIONS.items():
-            if backend == "parakeet_tdt":
-                 if b == backend and v == variant:
-                     target_label = label
-                     break
-            else:
-                 if b == backend and s == size:
-                     target_label = label
-                     break
-                     
-        self.combo_model.setCurrentText(target_label)
-        self.combo_lang.setCurrentText(settings.get("language"))
-        
-        mode = settings.get("output_mode")
-        if mode == "paste":
-            self.radio_paste.setChecked(True)
+    def update_amplitude(self, level):
+        # Convert 0.0-1.0 to 0-100 with some boosting for visibility
+        if level < 0.001: val = 0
         else:
-            self.radio_clipboard.setChecked(True)
+             # loose log/boost curve
+             val = int(level * 400) # Simple boost
+             if val > 100: val = 100
+        self.progress_mic_level.setValue(val)        
+
+
+    def on_server_state_changed(self, state):
+        # Update Test Button if relevant
+        if state == "recording":
+             # We might be in test mode or normal mode.
+             if self.btn_test_mic.isChecked():
+                 self.btn_test_mic.setText("Stop recording and play")
+                 self.btn_test_mic.setStyleSheet("background-color: #d94444; color: white;")
+        elif state == "recording_test" or (state == "recording" and self.btn_test_mic.isChecked()):
+             self.btn_test_mic.setText("Stop recording and play")
+             self.btn_test_mic.setStyleSheet("background-color: #d94444; color: white;")
+        elif state == "idle" or state == "playing":
+             self.btn_test_mic.setChecked(False)
+             self.btn_test_mic.setText("Test Microphone")
+             self.btn_test_mic.setStyleSheet("background-color: #555; color: white;")
+
+    def on_test_mic_clicked(self):
+        if not self.server:
+            return
             
-        self.chk_logging.setChecked(settings.get("enable_logging", True))
-        self.txt_log_dir.setText(settings.get("log_dir", ""))
+        if self.btn_test_mic.isChecked():
+            # Start Test
+            self.server.start_mic_test()
+        else:
+            # Stop Test
+            self.server.stop_recording()
+
+    def load_settings(self):
+        try:
+            backend = settings.get("model_backend", "faster_whisper")
+            variant = settings.get("parakeet_variant", "v2_en")
+            size = settings.get("model_size", "base")
+            if size == "large-v3": size = "large-v3"
+            elif size and "base" in size: size = "base"
             
-        self.on_model_changed(target_label)
+            # Find matching label
+            target_label = "Whisper (Base)" # Default
+            for label, (b, v, s) in MODEL_OPTIONS.items():
+                if backend == "parakeet_tdt":
+                     if b == backend and v == variant:
+                         target_label = label
+                         break
+                else:
+                     if b == backend and s == size:
+                         target_label = label
+                         break
+            
+            # Safely set Model
+            try:
+                self.combo_model.blockSignals(True)
+                self.combo_model.setCurrentText(target_label)
+                self.combo_model.blockSignals(False)
+            except RuntimeError:
+                pass # C++ object deleted
+                
+            # Safely set Language
+            try:
+                self.combo_lang.blockSignals(True)
+                self.combo_lang.setCurrentText(settings.get("language"))
+                self.combo_lang.blockSignals(False)
+            except RuntimeError:
+                pass
+            
+            # Microphone settings ignored (using OS default)
+            
+            mode = settings.get("output_mode")
+            if mode == "paste":
+                self.radio_paste.setChecked(True)
+            else:
+                self.radio_clipboard.setChecked(True)
+                
+            self.chk_logging.setChecked(settings.get("enable_logging", True))
+            self.txt_log_dir.setText(settings.get("log_dir", ""))
+                
+            # Manually trigger update once
+            self.on_model_changed(target_label)
+            
+        except Exception as e:
+            print(f"Error loading settings: {e}")
 
     def on_model_changed(self, text):
         data = MODEL_OPTIONS.get(text)
@@ -287,15 +436,10 @@ class SettingsWindow(QWidget):
             
         self.check_model_status()
 
-    # ... check_model_status ...
-
-
-
     def browse_log_dir(self):
         path = QFileDialog.getExistingDirectory(self, "Select Log Directory")
         if path:
             self.txt_log_dir.setText(path)
-
 
     def check_model_status(self, text=None):
         if not self.server:
@@ -349,7 +493,7 @@ class SettingsWindow(QWidget):
         if backend == "faster_whisper":
              model_id = size
         else:
-             model_id = backend # Generic ID for Parakeet in delete? Or handle differently.
+             model_id = backend 
 
         reply = QMessageBox.question(self, "Confirm Delete", 
                                    f"Are you sure you want to delete model '{model_label}'?",
@@ -379,6 +523,8 @@ class SettingsWindow(QWidget):
         settings.set("language", self.combo_lang.currentText())
         settings.set("enable_logging", self.chk_logging.isChecked())
         settings.set("log_dir", self.txt_log_dir.text())
+        # Mic setting is ignored/cleared
+        settings.set("input_device_name", "Default")
         
         mode = "paste" if self.radio_paste.isChecked() else "clipboard"
         settings.set("output_mode", mode)
@@ -414,15 +560,6 @@ class SettingsWindow(QWidget):
             self.download_success = False
             
             def run_download():
-                # Server download_model expects clean name (size for whisper, or just parakeet trigger)
-                # The server likely uses settings to decide for Parakeet, but for Whisper it usually needs the size as arg
-                arg = size if backend == "faster_whisper" else "parakeet-tdt-0.6b" # Legacy arg for parakeet?
-                # Actually, check what server expects. 
-                # In original code: `clean_model` passed was `model` (e.g. "base") or `model` (parakeet..)
-                # logic was: `clean_model = model` -> if whisper, remove "whisper ". 
-                # Here `size` IS "base", "tiny" etc.
-                # For Parakeet, original passed "parakeet-tdt-0.6b" from combo.
-                
                 download_arg = size if size else "parakeet-tdt-0.6b"
                 self.download_success = self.server.download_model(download_arg)
                 
@@ -555,8 +692,10 @@ class SystemTrayApp:
         self.menu.addAction(self.menu_lang.menuAction())
         
         self.menu.addSeparator()
+
+        # REMOVED Microphone Submenu as requested
         
-        # 4. Standard Items
+        # 5. Standard Items
         self.act_settings = QAction("Settings", self.menu)
         self.act_settings.triggered.connect(self.show_settings)
         self.menu.addAction(self.act_settings)
@@ -603,7 +742,9 @@ class SystemTrayApp:
         if lang in self.lang_actions:
             self.lang_actions[lang].setChecked(True)
             
-        # 3. Apply Constraints (Parakeet lock)
+        # 3. Mic sync removed
+
+        # 4. Apply Constraints (Parakeet lock)
         self.apply_constraints()
 
     def apply_constraints(self):
@@ -645,6 +786,12 @@ class SystemTrayApp:
         if self.settings_window and self.settings_window.isVisible():
             self.settings_window.load_settings()
 
+    # on_menu_mic_changed removed
+
+        
+        if self.settings_window and self.settings_window.isVisible():
+            self.settings_window.load_settings()
+
     def toggle_recording_action(self):
         if self.server:
             # Check current state from server logic?
@@ -668,32 +815,82 @@ class SystemTrayApp:
         QTimer.singleShot(3000, self.overlay.hide)
 
     def on_state_changed(self, state):
-        is_rec = (state == "recording")
+        is_rec = (state == "recording") or (state == "recording_test")
         
-        # Update Menu Action
+        # Update Tray Menu Text
         if is_rec:
             self.act_toggle.setText("Stop Recording")
-            self.act_toggle.setIcon(QIcon.fromTheme("media-playback-stop"))
+            try:
+                self.act_toggle.setIcon(QIcon.fromTheme("media-playback-stop"))
+            except: pass
         else:
             self.act_toggle.setText("Start Recording")
-            self.act_toggle.setIcon(QIcon.fromTheme("media-record"))
+            try:
+                self.act_toggle.setIcon(QIcon.fromTheme("media-record"))
+            except: pass
             
+        # Handle Overlay State
+    def on_state_changed(self, state):
+        is_rec = (state == "recording") or (state == "recording_test")
+        
+        # Update Tray Menu Text
+        if is_rec:
+            self.act_toggle.setText("Stop Recording")
+            try:
+                self.act_toggle.setIcon(QIcon.fromTheme("media-playback-stop"))
+            except: pass
+        else:
+            self.act_toggle.setText("Start Recording")
+            try:
+                self.act_toggle.setIcon(QIcon.fromTheme("media-record"))
+            except: pass
+            
+        # Handle Overlay State
         if state == "recording":
-            self.overlay.set_focusable(True) # Ensure we can catch ESC
-            self.overlay.show()
+            # Normal Dictation: Overlay on top, focused to catch ESC
+            self.overlay.set_on_top(True)
+            self.overlay.set_focusable(True) 
+            self.overlay.set_interactive(True) 
             self.overlay.set_state("Recording", "Listening...")
+            self.overlay.show()
+            self.overlay.activateWindow()
 
-        elif state == "loading":
-            self.overlay.show()
-            self.overlay.set_state("Loading", "Loading Model...")
+        elif state == "recording_test":
+            # Mic Test: Use Embedded Visualizer in Settings Window
+            # Do NOT show overlay, as it causes focus/click issues on some WMs
+            self.overlay.hide()
+            
+            # Ensure Settings is visible
+            if self.settings_window:
+                self.settings_window.show()
+                self.settings_window.raise_()
+                self.settings_window.activateWindow()
+
         elif state == "transcribing":
-            self.overlay.show()
+            self.overlay.set_on_top(True)
             self.overlay.set_state("Transcribing", "Processing...")
+            self.overlay.show()
+            
+        elif state == "playing":
+             # Playback state (Mic Test finished)
+             self.overlay.set_state("Playback", "Playing...")
+             self.overlay.set_on_top(False)
+             self.overlay.show()
+             
         elif state == "idle":
-            QTimer.singleShot(2000, self.overlay.hide)
+            # Hide overlay immediately when going to idle
+            self.overlay.hide()
+
+    # Removed incorrect on_server_state_changed from SystemTrayApp that references btn_test_mic
+
 
     def on_amplitude_changed(self, level):
-        self.overlay.update_amplitude(level)
+        # Dispatch to correct visualizer
+        if self.server and self.server.mic_testing:
+             if self.settings_window and self.settings_window.isVisible():
+                 self.settings_window.update_amplitude(level)
+        else:
+             self.overlay.update_amplitude(level)
 
     def on_text_ready(self, text):
         self.overlay.set_state("Done", f"Success")
