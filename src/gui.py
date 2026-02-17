@@ -942,9 +942,42 @@ class SystemTrayApp:
                 self.settings_window.raise_()
                 self.settings_window.activateWindow()
 
+        elif state == "loading":
+             self.overlay.set_on_top(True)
+             self.overlay.set_state("System", "Loading Model...")
+             self.overlay.show()
+             
         elif state == "transcribing":
             self.overlay.set_on_top(True)
-            self.overlay.set_state("Transcribing", "Processing...")
+            
+            # Prepare details text
+            # Prepare details text
+            backend = settings.get("model_backend", "faster_whisper")
+            variant = settings.get("parakeet_variant", "v2_en")
+            size = settings.get("model_size", "base")
+            lang = settings.get("language", "auto").title()
+            
+            # Find pretty name from MODEL_OPTIONS
+            model_name = "Unknown Model"
+            for label, (b, v, s) in MODEL_OPTIONS.items():
+                if backend == "parakeet_tdt":
+                    if b == backend and v == variant:
+                        model_name = label
+                        break
+                else:
+                    if b == backend and s == size:
+                        model_name = label
+                        break
+            
+            # Clean up label: "Parakeet (Fast English)" -> "Parakeet Fast English"
+            clean_name = model_name.replace("(", "").replace(")", "")
+            
+            if backend == "parakeet_tdt":
+                 details = clean_name
+            else:
+                 details = f"{clean_name} • {lang}"
+                 
+            self.overlay.set_state("Transcribing", "Processing...", details=details)
             self.overlay.show()
             
         elif state == "playing":

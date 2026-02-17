@@ -21,6 +21,7 @@ class OverlayWindow(QWidget):
         self.bars = [0.1] * 20  # 20 bars for visualization
         self.target_amplitude = 0.0
         self.state_text = "Ready"
+        self.details_text = None
         self.is_transcribing = False
 
         # Timer for smooth animation
@@ -115,8 +116,9 @@ class OverlayWindow(QWidget):
         else:
             self.target_amplitude = 0.0
 
-    def set_state(self, state, text=""):
+    def set_state(self, state, text="", details=None):
         self.state_text = text if text else state.title()
+        self.details_text = details
         self.is_transcribing = (state == "transcribing")
         self.update()
         
@@ -157,42 +159,64 @@ class OverlayWindow(QWidget):
 
         w, h = self.width(), self.height()
         
-        # Define the "Virtual" overlay area (bottom center)
-        overlay_w = 400
+        # Define layout constants based on state
+        overlay_w = 380
         overlay_h = 100
-        overlay_x = (w - overlay_w) // 2
-        overlay_y = h - overlay_h - 100 # 100px padding from bottom
         
-        # 1. Draw Background Pill (in virtual area)
-        bg_color = QColor(20, 20, 20, 220) # Dark semi-transparent
+        overlay_x = (w - overlay_w) // 2
+        overlay_y = h - overlay_h - 100 
+        
+        # 1. Draw Background Pill
+        bg_color = QColor(20, 20, 20, 230)
         painter.setBrush(QBrush(bg_color))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(overlay_x, overlay_y, overlay_w, overlay_h, 20, 20)
+        painter.drawRoundedRect(overlay_x, overlay_y, overlay_w, overlay_h, 16, 16)
 
-        # 2. Draw Text Status
-        painter.setPen(QColor(255, 255, 255))
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        text_rect = painter.boundingRect(0, 0, overlay_w, 30, Qt.AlignmentFlag.AlignCenter, self.state_text)
-        painter.drawText(overlay_x + (overlay_w - text_rect.width()) // 2, overlay_y + overlay_h - 20, self.state_text)
-
-        # 3. Draw Visualization Bars
-        bar_w = 8
+        # 2. Draw Visualization Bars
+        bar_w = 6
         gap = 4
-        total_bar_width = len(self.bars) * (bar_w + gap)
+        num_bars = len(self.bars)
+        total_bar_width = num_bars * (bar_w + gap) - gap
         start_x = overlay_x + (overlay_w - total_bar_width) // 2
         
-        center_y = overlay_y + (overlay_h - 30) // 2 + 10 # Vertically centered above text
-
+        # Branch Layout Logic
+        if self.details_text:
+            # Transcribing / Loading Mode (Compact Bars + 2 Line Text)
+            bars_center_y = overlay_y + 30
+            max_bar_h = 40
+            
+            # Text Y positions
+            y_main = overlay_y + 70
+            y_sub = overlay_y + 88
+            
+        else:
+            # Recording Mode (Large Bars + 1 Line Text)
+            bars_center_y = overlay_y + 40 # Lower center for balance
+            max_bar_h = 60
+            
+            # Text Y positions
+            y_main = overlay_y + 85 # Bottom center
+            
+        
+        # Bar Colors
         color_start = QColor("#007acc")
         color_loud = QColor("#00ff88") # Greenish for loud
+        if self.is_transcribing:
+             color_start = QColor("#a64dff") 
+             color_loud = QColor("#ff4da6")
 
         for i, height_factor in enumerate(self.bars):
-            # Height calculation (max 50px)
-            bar_h = 10 + (height_factor * 50)
-            if bar_h > 60: bar_h = 60
+            # Height calculation
+            # factor 0.0-1.0
+            if self.details_text:
+                 bar_h = 4 + (height_factor * 30)
+            else:
+                 bar_h = 10 + (height_factor * 50)
+                 
+            if bar_h > max_bar_h: bar_h = max_bar_h
             
             x = start_x + i * (bar_w + gap)
-            y = center_y - (bar_h / 2)
+            y = bars_center_y - (bar_h / 2)
             
             # Dynamic Color
             c = QColor(color_start)
@@ -200,6 +224,29 @@ class OverlayWindow(QWidget):
                 c = color_loud
             
             painter.setBrush(QBrush(c))
-            painter.drawRoundedRect(int(x), int(y), int(bar_w), int(bar_h), 4, 4)
+            painter.drawRoundedRect(int(x), int(y), int(bar_w), int(bar_h), 2, 2)
+
+        # 3. Draw Text Status
+        text_center_x = overlay_x + overlay_w // 2
+        
+        if self.details_text:
+            # Main Text
+            painter.setPen(QColor(255, 255, 255))
+            painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+            rect_main = painter.boundingRect(0, 0, overlay_w, 30, Qt.AlignmentFlag.AlignCenter, self.state_text)
+            painter.drawText(text_center_x - rect_main.width() // 2, int(y_main), self.state_text)
+            
+            # Details Text
+            painter.setPen(QColor(180, 180, 180)) 
+            painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Normal))
+            rect_sub = painter.boundingRect(0, 0, overlay_w, 20, Qt.AlignmentFlag.AlignCenter, self.details_text)
+            painter.drawText(text_center_x - rect_sub.width() // 2, int(y_sub), self.details_text)
+            
+        else:
+            # Single line centered (Recording)
+            painter.setPen(QColor(255, 255, 255))
+            painter.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold)) # Slightly larger for emphasis
+            rect_main = painter.boundingRect(0, 0, overlay_w, 30, Qt.AlignmentFlag.AlignCenter, self.state_text)
+            painter.drawText(text_center_x - rect_main.width() // 2, int(y_main), self.state_text)
 
 import time
